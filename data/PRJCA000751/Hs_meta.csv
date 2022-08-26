@@ -1,0 +1,69 @@
+sample,file,adapter,condition
+CRR026084,/reads/CRR026084_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Brain total RNA
+CRR026084,/reads/CRR026084_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Brain total RNA
+CRR026085,/reads/CRR026085_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Brain RNase R
+CRR026085,/reads/CRR026085_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Brain RNase R
+CRR026087,/reads/CRR026087_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Testis total RNA
+CRR026087,/reads/CRR026087_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Testis total RNA
+CRR026088,/reads/CRR026088_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Testis RNase R
+CRR026088,/reads/CRR026088_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Testis RNase R
+CRR026090,/reads/CRR026090_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Thymus total RNA
+CRR026090,/reads/CRR026090_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Thymus total RNA
+CRR026091,/reads/CRR026091_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Thymus RNase R
+CRR026091,/reads/CRR026091_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Thymus RNase R
+CRR026093,/reads/CRR026093_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Kidney total RNA
+CRR026093,/reads/CRR026093_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Kidney total RNA
+CRR026094,/reads/CRR026094_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Kidney RNase R
+CRR026094,/reads/CRR026094_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Kidney RNase R
+CRR026096,/reads/CRR026096_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Prostate total RNA
+CRR026096,/reads/CRR026096_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Prostate total RNA
+CRR026097,/reads/CRR026097_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Prostate RNase R
+CRR026097,/reads/CRR026097_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Prostate RNase R
+CRR026099,/reads/CRR026099_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spinal cord total RNA
+CRR026099,/reads/CRR026099_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spinal cord total RNA
+CRR026100,/reads/CRR026100_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spinal cord RNase R
+CRR026100,/reads/CRR026100_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spinal cord RNase R
+CRR026102,/reads/CRR026102_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spleen total RNA
+CRR026102,/reads/CRR026102_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spleen total RNA
+CRR026103,/reads/CRR026103_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spleen RNase R
+CRR026103,/reads/CRR026103_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Spleen RNase R
+CRR026105,/reads/CRR026105_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Uterus total RNA
+CRR026105,/reads/CRR026105_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Uterus total RNA
+CRR026106,/reads/CRR026106_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Uterus RNase R
+CRR026106,/reads/CRR026106_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Uterus RNase R
+CRR026108,/reads/CRR026108_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Liver total RNA
+CRR026108,/reads/CRR026108_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Liver total RNA
+CRR026109,/reads/CRR026109_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Liver RNase R
+CRR026109,/reads/CRR026109_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Liver RNase R
+CRR026111,/reads/CRR026111_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Heart total RNA
+CRR026111,/reads/CRR026111_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Heart total RNA
+CRR026112,/reads/CRR026112_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Heart RNase R
+CRR026112,/reads/CRR026112_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Heart RNase R
+CRR026114,/reads/CRR026114_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Colon total RNA
+CRR026114,/reads/CRR026114_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Colon total RNA
+CRR026115,/reads/CRR026115_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Colon RNase R
+CRR026115,/reads/CRR026115_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Colon RNase R
+CRR026117,/reads/CRR026117_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Bone marrow total RNA
+CRR026117,/reads/CRR026117_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Bone marrow total RNA
+CRR026118,/reads/CRR026118_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Bone marrow RNase R
+CRR026118,/reads/CRR026118_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Bone marrow RNase R
+CRR026120,/reads/CRR026120_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Lung total RNA
+CRR026120,/reads/CRR026120_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Lung total RNA
+CRR026121,/reads/CRR026121_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Lung RNase R
+CRR026121,/reads/CRR026121_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Lung RNase R
+CRR026123,/reads/CRR026123_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Skeletal muscle total RNA
+CRR026123,/reads/CRR026123_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Skeletal muscle total RNA
+CRR026124,/reads/CRR026124_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Skeletal muscle RNase R
+CRR026124,/reads/CRR026124_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Skeletal muscle RNase R
+CRR026126,/reads/CRR026126_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Small Intestine total RNA
+CRR026126,/reads/CRR026126_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Small Intestine total RNA
+CRR026127,/reads/CRR026127_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Small Intestine RNase R
+CRR026127,/reads/CRR026127_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Small Intestine RNase R
+CRR026129,/reads/CRR026129_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Placenta total RNA
+CRR026129,/reads/CRR026129_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Placenta total RNA
+CRR026130,/reads/CRR026130_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Placenta RNase R
+CRR026130,/reads/CRR026130_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Placenta RNase R
+CRR026132,/reads/CRR026132_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Stomach total RNA
+CRR026132,/reads/CRR026132_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Stomach total RNA
+CRR026133,/reads/CRR026133_f1.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Stomach RNase R
+CRR026133,/reads/CRR026133_r2.fq.gz,/CirComPara/tools/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa,Stomach RNase R
