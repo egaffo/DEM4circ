@@ -1,0 +1,806 @@
+---
+title: "Jaccard index"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+library(data.table)
+library(patchwork)
+# install.packages("ggdendro")
+library(ggdendro)
+library(ggplot2)
+library(scales)
+library(viridis)
+library(dendsort)
+library(seriation)
+
+library(BiocParallel)
+library(SummarizedBenchmark)
+
+library(svglite)
+
+library(ComplexHeatmap)
+library(circlize)
+library(gridtext)
+library(colorspace)
+
+outdir <- "jaccard"
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"))
+```
+
+# Method names
+
+```{r}
+method_types <- 
+  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
+                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
+                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
+                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
+                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
+                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
+                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
+                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
+                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
+                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
+                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
+                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
+                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
+             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Single cell / metagenome"),
+             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
+                            "DESeq2", "DESeq2", "glmGamPoi", 
+                            "DESeq2", "DESeq2", "DESeq2", 
+                            "DESeq2", "DEsingle", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "limma", "lncDIFF", "MAST", 
+                            "metagenomeSeq", "monocle", "NBID", 
+                            "NBID", "NOISeqBIO", "PoissonSeq", 
+                            "ROTS", "SAMseq", "Seurat", 
+                            "Seurat", "Voom", "Voom", 
+                            "Voom", "Voom", "Voom", 
+                            "Voom", "Wilcoxon"))
+```
+
+```{r}
+#' A function to mimic the ggplot default palette
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+                          nm = sort(method_types$Method))
+
+method_types_colors.dt <- 
+  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+        method_types, 
+        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+
+method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+                                    method_types_colors.dt$BaseMethod))
+```
+
+```{r, fig.width=2.5, fig.height=6.69}
+plot_dt <- 
+  melt(copy(method_types)[, c("Base", "Parameters", 
+                              "Test") := tstrsplit(Method, "_")][, .(Method,
+                                                                     Type,
+                                                                     `Base tool` = BaseMethod,
+                                                                     Parameters,
+                                                                     Test)], 
+                id.vars = c("Method", "Type"))
+
+## Fix names
+plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
+plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
+plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
+plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
+plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
+plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
+plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
+
+plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
+plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
+plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
+plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
+
+plot_dt[variable == "Parameters", value := toupper(value)]
+
+plot_dt$variable <- factor(plot_dt$variable, 
+                           levels = rev(sort((levels(plot_dt$variable)))), 
+                           ordered = T)
+
+plot_base_method_color_text <-
+  ggplot(plot_dt[variable != "Test"], 
+         aes(y = Method, 
+             x = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            size = 3) +
+    scale_x_discrete(position = "bottom") +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(),
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = NA), 
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text
+
+plot_base_method_color_text_rot <-
+  ggplot(plot_dt, 
+         aes(x = Method, 
+             y = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            size = 3, angle = 90) +
+    # scale_x_discrete(position = "bottom") +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(angle = 90, hjust = .5),
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = NA), 
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text_rot
+```
+
+```{r}
+method_labels_table <- 
+  dcast(plot_dt[, .(Method, variable, value)], 
+      Method ~ variable)[, .(Method, 
+                             MethodLabel = paste(`Base tool`, 
+                                                 Parameters, #Test, 
+                                                 sep = " "))]
+```
+
+# Base tiles
+
+```{r, fig.width=7, fig.height=4}
+library(ggthemes)
+plot_dt <- copy(method_types)
+
+plot_base_method_type_tiles <-
+  ggplot(plot_dt, 
+         aes(y = Method, 
+             x = "", fill = Type)) +
+  geom_tile(color = "white", width = 0.9, height = 0.9, 
+            size = .5) +
+  labs(x = NULL, y = NULL) +
+  scale_fill_manual(values = setNames(tableau_color_pal(palette = "Classic Purple-Gray 6")(2), #"Nuriel Stone"
+                                      c("Bulk RNA-seq", "Single cell / metagenome"))) +
+  guides(fill = guide_legend(title = "Method purpose", 
+                             title.position = "left", 
+                             title.hjust = .5)) +
+  theme_dendro() +
+  theme(legend.position = "bottom")
+
+# plot_base_method_type_tiles
+```
+
+# Jaccard
+
+The Jaccard index (or similarity) gives the size of the intersection divided by the size of the union of the sample sets. The Jaccard distance, which measures dissimilarity between sample sets, is complementary to the Jaccard coefficient and is obtained by subtracting the Jaccard coefficient from 1, or, equivalently, by dividing the difference of the sizes of the union and the intersection of two sets by the size of the union.  
+
+Here, the Jaccard similarity is computed on the DECs called by each method at 5% FDR.    
+Therefore, 
+
+```{r}
+sumBench_perf_metrics_qs_files <- file.path("benchmark_results", 
+                                            c("DM1", "IPF", "MS", "IDC"), 
+                                            "sumBench_perf_metrics.qs")
+
+names(sumBench_perf_metrics_qs_files) <- sub("benchmark_results/", "",
+                                             dirname(sumBench_perf_metrics_qs_files))
+
+ncpus <- BiocParallel::multicoreWorkers()
+bpparam <- BiocParallel::SerialParam()
+
+sbL <- bplapply(sumBench_perf_metrics_qs_files, 
+                qs::qread, 
+                nthreads = ncpus,  #multicoreWorkers()
+                BPPARAM = bpparam)
+
+adj_pval_deind_dt <- 
+      rbindlist(lapply(sbL, 
+                       function(y) {
+                         rbindlist(lapply(y,
+                                          function(x) {
+                                            melt(data.table(true_val = as.integer(groundTruths(x)[["adj_pv"]]),
+                                                            assays(x)[["adj_pv"]]),
+                                                 id.vars = "true_val",
+                                                 value.name = "preds",
+                                                 variable.name = "Method")
+                                          }),
+                                   idcol = "Dataset")
+                       }), 
+                idcol = "Source_ds")
+
+# adj_pval_deind_dt[is.na(preds), preds := 1]
+
+adj_pval_deind_dt[, c("SetSize", "MZP", "DsType", "DsId") := tstrsplit(Dataset, "_"), 
+                  by = Dataset]
+```
+
+```{r}
+ds_names <- c("DM1", "IPF", "MS", "IDC")
+
+padj <- adj_pval_deind_dt[MZP == "bulk" & DsType == "de"]
+```
+
+```{r}
+padj[, Gid := seq_along(preds), by = .(Source_ds, Dataset, Method)]
+padj[is.na(preds), preds := 1]
+
+padj_l <- split(padj, drop = F, by = c("Source_ds", "Dataset"), flatten = F)
+
+## compute dists for 5% FDR
+jaccard_dists <- 
+    rbindlist(lapply(padj_l, function(dataset){
+        
+        rbindlist(lapply(dataset, function(simds){
+            
+            mt <- as.matrix(data.frame(dcast(simds[, .(Method, preds, Gid)], 
+                                             Gid ~ Method, 
+                                             value.var = "preds", 
+                                             fill = 0), 
+                                       row.names = "Gid"))
+            as.data.table(as.matrix(dist(x = t(mt) <= .05, method = "binary")),
+                          keep.rownames = "Method")
+        }), 
+        idcol = "Dataset")
+    }), 
+    idcol = "Source_ds")
+
+## compute dists for 10% FDR
+jaccard_dists_0.1 <- 
+    rbindlist(lapply(padj_l, function(dataset){
+        
+        rbindlist(lapply(dataset, function(simds){
+            
+            mt <- as.matrix(data.frame(dcast(simds[, .(Method, preds, Gid)], 
+                                             Gid ~ Method, 
+                                             value.var = "preds", 
+                                             fill = 0), 
+                                       row.names = "Gid"))
+            as.data.table(as.matrix(dist(x = t(mt) <= .1, method = "binary")),
+                          keep.rownames = "Method")
+        }), 
+        idcol = "Dataset")
+    }), 
+    idcol = "Source_ds")
+
+## compute dists for 1% FDR
+jaccard_dists_0.01 <-
+    rbindlist(lapply(padj_l, function(dataset){
+
+        rbindlist(lapply(dataset, function(simds){
+
+            mt <- as.matrix(data.frame(dcast(simds[, .(Method, preds, Gid)],
+                                             Gid ~ Method,
+                                             value.var = "preds",
+                                             fill = 0),
+                                       row.names = "Gid"))
+            as.data.table(as.matrix(dist(x = t(mt) <= .01, method = "binary")),
+                          keep.rownames = "Method")
+        }),
+        idcol = "Dataset")
+    }),
+    idcol = "Source_ds")
+
+avg_jaccard_dists <-
+    melt(jaccard_dists, 
+         id.vars = c("Source_ds", "Dataset", "Method"), 
+         variable.name = "Method2", 
+         value.name = "Jdist")[, c("SetSize", "MZP", "DsType", 
+                                   "DsId") := tstrsplit(Dataset, "_"), 
+                               by = Dataset][, .(AvgJDist = mean(Jdist)), 
+                                             by = .(Source_ds, SetSize, MZP, DsType, 
+                                                    Method, Method2)]
+
+avg_jaccard_dists_0.1 <-
+    melt(jaccard_dists_0.1, 
+         id.vars = c("Source_ds", "Dataset", "Method"), 
+         variable.name = "Method2", 
+         value.name = "Jdist")[, c("SetSize", "MZP", "DsType", 
+                                   "DsId") := tstrsplit(Dataset, "_"), 
+                               by = Dataset][, .(AvgJDist = mean(Jdist)), 
+                                             by = .(Source_ds, SetSize, MZP, DsType, 
+                                                    Method, Method2)]
+
+avg_jaccard_dists_0.01 <-
+    melt(jaccard_dists_0.01, 
+         id.vars = c("Source_ds", "Dataset", "Method"), 
+         variable.name = "Method2", 
+         value.name = "Jdist")[, c("SetSize", "MZP", "DsType", 
+                                   "DsId") := tstrsplit(Dataset, "_"), 
+                               by = Dataset][, .(AvgJDist = mean(Jdist)), 
+                                             by = .(Source_ds, SetSize, MZP, DsType, 
+                                                    Method, Method2)]
+```
+
+```{r, warning=FALSE}
+avg_jaccard_dists_l <- split(avg_jaccard_dists, by = c("Source_ds", "SetSize"), flatten = F, keep.by = F)
+
+method_names <- sort(unique(avg_jaccard_dists_l$DM1$N10$Method))
+method_colors <- setNames(hue_pal()(length(method_names)), method_names)
+
+# x <- avg_jaccard_dists_l$DM1$N10
+# ggdendrogram(hclust(as.dist(data.frame(dcast(setSize, 
+#                                              Method ~ Method2, 
+#                                              value.var = "AvgJDist"), 
+#                                        row.names = "Method"))))
+
+ggd_l <- 
+    lapply(avg_jaccard_dists_l, function(ds){
+        lapply(ds, function(setSize){
+            ddata <- 
+                dendro_data(as.dendrogram(dendsort(hclust(as.dist(data.frame(dcast(setSize, 
+                                                                          Method ~ Method2, 
+                                                                          value.var = "AvgJDist"), 
+                                                                    row.names = "Method"))), 
+                                                   isReverse = T)), 
+                            type = "rectangle")
+            
+            ggplot(segment(ddata), aes(x = x, y = y)) +
+                geom_segment(aes(xend = xend, yend = yend)) +
+                scale_x_continuous(name = NULL, breaks = label(ddata)$x, 
+                                   labels = label(ddata)$label, 
+                                   position = "top") +
+                scale_y_reverse(name = "Jaccard distance", expand = c(0, 0.01)) +
+                coord_flip() +
+                theme_minimal() +
+                theme(axis.text.y = element_text(color = method_colors[label(ddata)$label]),
+                      panel.grid.major.x = element_blank(),
+                      panel.grid.minor.x = element_blank(),
+                      panel.grid.major.y = element_blank(),
+                      panel.grid.minor.y = element_blank())
+        })
+        
+    })
+```
+
+```{r, fig.height=20, fig.width=10}
+# gg_rows <- lapply(setNames(ds_names, nm = ds_names), 
+#                   function(x, ggd_l){
+#                       ggd_l[[x]]$N03 + ggtitle(paste(x, "N03")) +
+#                           ggd_l[[x]]$N05 + ggtitle(paste(x, "N05")) +
+#                           ggd_l[[x]]$N10 + ggtitle(paste(x, "N10"))
+#                   }, 
+#                   ggd_l = ggd_l)
+# 
+# gg_rows$DM1 / gg_rows$IPF / gg_rows$MS / gg_rows$IDC
+```
+
+## Average Jaccard per set size
+
+```{r, warning=FALSE, fig.width=9, fig.height=5.5}
+plots <- 
+    lapply(split(avg_jaccard_dists[, .(AvgJDist = mean(AvgJDist)), 
+                                   by = .(SetSize, MZP, DsType, Method, Method2)], 
+                 by = c("SetSize"), flatten = F, keep.by = F), 
+           function(setSize){
+               # ddata <- 
+               #     dendro_data(as.dendrogram(dendsort(hclust(as.dist(data.frame(dcast(setSize, 
+               #                                                               Method ~ Method2, 
+               #                                                               value.var = "AvgJDist"), 
+               #                                                         row.names = "Method")))), 
+               #                               isReverse = T), 
+               #                 type = "rectangle")
+               ddata <- 
+                   dendro_data(as.dendrogram(seriate(as.dist(data.frame(dcast(setSize, 
+                                                                              Method ~ Method2, 
+                                                                              value.var = "AvgJDist"), 
+                                                                        row.names = "Method")), 
+                                                     method = "GW_complete")[[1]]), 
+                               type = "rectangle")
+               
+               plot <-
+                   ggplot(segment(ddata), aes(x = y, y = x)) +
+                   geom_segment(aes(yend = xend, xend = yend)) +
+                   scale_y_continuous(name = NULL, 
+                                      breaks = label(ddata)$x, 
+                                      labels = label(ddata)$label, 
+                                      position = "right", 
+                                      expand = c(0, 0)) +
+                   scale_x_reverse(name = "Jaccard distance", expand = c(0, 0)) +
+                   coord_cartesian(ylim = c(.5, 38.5)) +
+                   theme_minimal() +
+                   theme(axis.text.y = element_text(color = method_colors[label(ddata)$label]),
+                         panel.grid.major.x = element_blank(),
+                         panel.grid.minor.x = element_blank(),
+                         panel.grid.major.y = element_blank(),
+                         panel.grid.minor.y = element_blank())
+               
+               list(ddata = ddata, plot = plot)
+           })
+
+# plots$N03$plot  + 
+#   ggtitle("N03") + 
+#   theme(axis.text.x = element_text(angle = -35, hjust = .5, vjust = -1)) +
+#   plots$N05$plot + 
+#   ggtitle("N05") + 
+#   theme(axis.text.x = element_text(angle = -35, hjust = .5, vjust = -1)) +
+#   plots$N10$plot + 
+#   ggtitle("N10") + 
+#   theme(axis.text.x = element_text(angle = -35, hjust = .5, vjust = -1))
+
+
+wrap_plots(wrap_plots(plots$N03$plot + 
+             theme(axis.text.y = element_blank(),
+                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+           plot_base_method_color_text + 
+             scale_y_discrete(limits = label(plots$N03$ddata)$label) &
+             ggtitle("N03"), 
+           nrow = 1, widths = c(.6, 1)), 
+  wrap_plots(plots$N05$plot + 
+               theme(axis.text.y = element_blank(),
+                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+             plot_base_method_color_text + 
+               scale_y_discrete(limits = label(plots$N05$ddata)$label) &
+               ggtitle("N05"), 
+             nrow = 1, widths = c(.6, 1)),
+  wrap_plots(plots$N10$plot + 
+               theme(axis.text.y = element_blank(),
+                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+             plot_base_method_color_text + 
+               scale_y_discrete(limits = label(plots$N10$ddata)$label) &
+               ggtitle("N10"), 
+             nrow = 1, widths = c(.6, 1)),
+  nrow = 1)
+```
+
+### N05  
+
+```{r, fig.height=5.5, fig.width=4.5}
+plots_avg_jdn <- plots
+avg_jdn05 <- plots$N05$plot
+
+method_order <- label(plots$N05$ddata)$label
+
+## plot the average rank tile plot instead of the mean performance
+avg_jdn05_dendro_wrap <- 
+    wrap_plots(avg_jdn05 + 
+                   theme(axis.text.x = element_text(angle = 90, hjust = 1),
+                         axis.text.y = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               plot_base_method_type_tiles +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.background = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               plot_base_method_color_text +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+               nrow = 1, guides = "collect",
+               widths = c(.4, .1, 1)) & 
+    theme(legend.position = "top",
+          legend.key.size = unit(.7, "lines"),
+          panel.spacing.x = unit(0, "lines"),
+          panel.grid.minor = element_blank(),
+          # plot.margin = margin(0.1, 0.1, 0.1, 0, "lines"),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+
+# avg_jdn05_dendro_wrap
+```
+
+```{r, fig.height=5.5, fig.width=4.5}
+top_avg_jdn05_dendro_wrap <- 
+    wrap_plots(avg_jdn05 + 
+                   coord_flip() +
+                   scale_x_continuous(name = "Jaccard distance") +
+                   theme(axis.text.y = element_text(color = "black"),
+                         axis.text.x = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               plot_base_method_type_tiles +
+                   coord_flip() +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.background = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               plot_base_method_color_text_rot +
+                   scale_x_discrete(limits = method_order) +
+                   theme(#text = element_text(angle = 90),
+                         plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+               ncol = 1, guides = "collect",
+               heights = c(1, .1, 1.5)) & 
+    theme(legend.position = "top",
+          legend.key.size = unit(.7, "lines"),
+          panel.spacing.x = unit(0, "lines"),
+          panel.grid.minor = element_blank(),
+          # plot.margin = margin(0.1, 0.1, 0.1, 0, "lines"),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+
+# top_avg_jdn05_dendro_wrap
+```
+
+### N05 heatmap
+
+```{r, fig.height=5.5, fig.width=5.5}
+plot_dt <- avg_jaccard_dists[, .(AvgJDist = mean(AvgJDist)), 
+                             by = .(SetSize, Method, 
+                                    Method2)][SetSize == "N05"]
+
+plot_dt[Method == Method2, AvgJDist := NA]
+# method_order <- sort(method_types$Method)
+method_order <- label(plots$N05$ddata)$label
+
+## compute the lower mat triangle pairs and erase the corresponding plot
+halfmat <- as.matrix(data.frame(dcast(plot_dt, Method ~ Method2, 
+                                      value.var = "AvgJDist"), 
+                                row.names = "Method"))[method_order, method_order]
+halfmat[lower.tri(halfmat, diag = T)] <- NA
+
+halfmat_m <- melt(data.table(halfmat, keep.rownames = "method1"), 
+                  id.vars = "method1", variable.name = "method2",
+                  value.name = "concordance")[method1 != method2]
+na_pairs <- halfmat_m[is.na(concordance), paste(method1, method2)]
+
+plot_dt[, pairname := paste(Method, Method2)]
+plot_dt[pairname %in% na_pairs, AvgJDist := NA]
+
+# seqpal <- "YlGnBu"
+seqpal <- "YlOrRd"
+
+n05_halfheat_plot <- 
+    ggplot(plot_dt, aes(x = Method, y = Method2, 
+                        color = 1 - AvgJDist,
+                        size = 1 - AvgJDist,
+                        fill = 1- AvgJDist)) +
+    # geom_tile() +
+    geom_point(shape = 21) +
+    coord_fixed() +
+    labs(x = NULL, y = NULL) +
+    scale_size("Jaccard similarity", range = c(0, 3), guide = "none") +
+    # scale_fill_viridis_c(option = "B", end = .98, direction = 1) +
+    # scale_color_viridis_c(option = "B", end = .98, direction = 1) +
+    scale_fill_distiller("Jaccard similarity", 
+                         direction = 1, na.value = "white", palette = seqpal) +
+    scale_color_distiller("Jaccard similarity", 
+                          direction = 1, na.value = "white", palette = seqpal) +
+    guides(color = guide_colorbar(title.position = "top", title.hjust = .5, 
+                                  frame.colour = "black"),
+           fill  = guide_colorbar(title.position = "top", title.hjust = .5, 
+                                  frame.colour = "black")) +
+    scale_x_discrete(limits = method_order,
+                     labels = data.frame(method_labels_table, row.names = "Method")[method_order, "MethodLabel"],
+                     position = "top") +
+    scale_y_discrete(limits = method_order,
+                     labels = data.frame(method_labels_table, row.names = "Method")[method_order, "MethodLabel"]) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = .5, color = method_colors[method_order]),
+          axis.text.y = element_text(color = method_colors[method_order]),
+          legend.position = c(-.2, 1.2),#"bottom",
+          legend.direction = "horizontal", legend.text = element_text(angle = 90, hjust = 1),
+          text = element_text(size = 9),
+          panel.grid = element_blank())
+
+# n05_halfheat_plot
+```
+
+### N05 heatmap + dendro
+
+```{r, fig.width=10.5, fig.height=7}
+# # design <- "#A
+# #            BC"
+# # 
+# # wrap_plots(top_avg_jdn05_dendro_wrap &
+# #                theme(legend.position = "none",
+# #                      plot.margin = margin(0, -1, 0, 0)),
+# #            avg_jdn05_dendro_wrap &
+# #                theme(legend.position = "botom",
+# #                      plot.margin = margin(0, -1, 0, 0)),
+# #            n05_halfheat_plot &
+# #                theme(legend.position = "bottom",
+# #                      axis.text.y = element_blank(),
+# #                      axis.text.x = element_blank(),
+# #                      plot.margin = margin(0, 0, 0, 0)),
+# #            widths = c(1.75, 2),
+# #            design = design)
+# 
+# wrap_plots(avg_jdn05_dendro_wrap +
+#                theme(#legend.position = "botom",
+#                      plot.margin = margin(0, 0, 0, 0),
+#                      plot.background = element_blank()),
+#            n05_halfheat_plot +
+#                theme(#legend.position = "bottom",
+#                      axis.text.y = element_blank(), 
+#                      # axis.text.x = element_blank(), 
+#                      plot.margin = margin(0, 0, 0, 0)),
+#            nrow = 1, 
+#            widths = c(1.75, 2)) &
+#   theme(plot.background = element_rect(fill = "transparent", colour = NA))
+```
+
+### Complex Hetmap
+
+```{r, fig.width=11, fig.height=11}
+# https://jokergoo.github.io/ComplexHeatmap-reference/book/a-single-heatmap.html#cell-fun
+
+plot_dt <- avg_jaccard_dists[, .(AvgJDist = mean(AvgJDist)), 
+                             by = .(SetSize, Method, 
+                                    Method2)][SetSize == "N05"]
+
+plot_dt[Method == Method2, AvgJDist := NA]
+
+## compute the lower mat triangle pairs and erase the corresponding plot
+jdistmat <- as.matrix(data.frame(dcast(plot_dt, Method ~ Method2, 
+                                       value.var = "AvgJDist"), 
+                                 row.names = "Method"))[sort(method_names), 
+                                                        sort(method_names)]
+
+jsimmat <- 1 - jdistmat
+
+jdistmat[is.na(jdistmat)] <- 0
+met_ord_so <- seriate(x = as.dist(jdistmat), method = "GW_complete")
+
+method_order <- data.frame(labels = met_ord_so[[1]]$labels, 
+                           x = met_ord_so[[1]]$order, 
+                           row.names = met_ord_so[[1]]$labels)
+method_order <- method_order[method_order$x, ]
+
+# colors_vector <- c("yellow", "orange", "red")
+colors_vector <- sequential_hcl(n = 3, palette = "OrYel", rev = T)
+
+col_fun = circlize::colorRamp2(c(0, .5, 1), colors_vector)
+
+## this is just to control that the final plot will keep the correct clustering
+# Heatmap(jsimmat, 
+#         name = "Jaccard\nsimilarity", 
+#         col = col_fun, 
+#         rect_gp = gpar(type = "none"), 
+#         cell_fun = function(j, i, x, y, width, height, fill) {
+#             grid.circle(x = x, y = y, 
+#                         r = jsimmat[j, i]/2 * min(unit.c(width,
+#                                                          height)), 
+#                         gp = gpar(fill = col_fun(jsimmat[j, i]), 
+#                                   col = NA))
+#         }, 
+#         cluster_rows = as.dendrogram(met_ord_so[[1]]),
+#         cluster_columns = as.dendrogram(met_ord_so[[1]]),
+#         # cluster_rows = F,
+#         # cluster_columns = F,
+#         show_row_names = T, 
+#         show_column_names = T)
+
+jsimmat <- jsimmat[method_order$label, method_order$label]
+jsimmat[upper.tri(jsimmat, diag = T)] <- NA
+jsimmat <- jsimmat[method_names, method_names]
+
+method_labels <- data.frame(method_labels_table, row.names = "Method")[method_order$label, , drop = F]
+method_labels_v <- setNames(method_labels$MethodLabel, nm = rownames(method_labels))
+
+# `col = col_fun` here is used to generate the legend
+jsh <- Heatmap(jsimmat, 
+               name = "Jaccard\nsimilarity", 
+               col = col_fun, 
+               rect_gp = gpar(type = "none"), 
+               cell_fun = function(j, i, x, y, width, height, fill) {
+                 if(!is.na(jsimmat[i, j])) {
+                   # grid.rect(x = x, y = y, width = width, height = height, 
+                   #           gp = gpar(col = "grey", fill = NA))
+                   grid.circle(x = x, y = y, 
+                               r = jsimmat[i, j]/2 * min(unit.c(width,
+                                                                height)), 
+                               gp = gpar(fill = col_fun(jsimmat[i, j]), 
+                                         col = NA))
+                 }
+               }, 
+               row_names_side = "left", 
+               column_dend_side = "bottom", 
+               width = unit(10, "cm"), 
+               height = unit(10, "cm"),
+               heatmap_legend_param = list(direction = "horizontal"), 
+               row_labels = gt_render(method_labels_v[rownames(jsimmat)]),
+               row_names_gp = gpar(col = method_colors[rownames(jsimmat)], fontsize = 9),
+               column_labels = gt_render(method_labels_v[rownames(jsimmat)]),
+               column_names_gp = gpar(col = method_colors[rownames(jsimmat)], fontsize = 9),
+               cluster_rows = as.dendrogram(met_ord_so[[1]]),
+               cluster_columns = as.dendrogram(met_ord_so[[1]]),
+               show_row_names = T, 
+               show_column_names = T)
+
+draw(jsh, heatmap_legend_side = "top")
+```
+
+### N10 @ 10%FDR
+
+```{r, fig.height=5.5, fig.width=4.5}
+n10fdr10_avg_jaccard_dists <- 
+    avg_jaccard_dists_0.1[SetSize == "N10",
+                          .(AvgJDist = mean(AvgJDist)), 
+                          by = .(SetSize, MZP, DsType, Method, Method2)]
+
+n10fdr10_ddata <- 
+    dendro_data(as.dendrogram(dendsort(hclust(as.dist(data.frame(dcast(n10fdr10_avg_jaccard_dists, 
+                                                                       Method ~ Method2, 
+                                                                       value.var = "AvgJDist"), 
+                                                                 row.names = "Method")))), 
+                              isReverse = T), 
+                type = "rectangle")
+
+n10fdr10_plot <-
+    ggplot(segment(n10fdr10_ddata), aes(x = y, y = x)) +
+    geom_segment(aes(yend = xend, xend = yend)) +
+    scale_y_continuous(name = NULL, 
+                       breaks = label(n10fdr10_ddata)$x, 
+                       labels = label(n10fdr10_ddata)$label, 
+                       position = "right", 
+                       expand = c(0, 0)) +
+    scale_x_reverse(name = "Jaccard distance", expand = c(0, 0)) +
+    coord_cartesian(ylim = c(.5, 38.5)) +
+    theme_minimal() +
+    theme(axis.text.y = element_text(color = method_colors[label(n10fdr10_ddata)$label]),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank())
+
+wrap_plots(n10fdr10_plot + 
+               theme(axis.text.x = element_text(angle = 90, hjust = 1),
+                     axis.text.y = element_blank(),
+                     plot.margin = margin(0, 0, 0, 0, "lines")),
+           plot_base_method_type_tiles +
+               scale_y_discrete(limits = label(n10fdr10_ddata)$label) +
+               theme(plot.background = element_blank(),
+                     plot.margin = margin(0, 0, 0, 0, "lines")),
+           plot_base_method_color_text +
+               scale_y_discrete(limits = label(n10fdr10_ddata)$label) +
+               theme(plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           nrow = 1, guides = "collect",
+           widths = c(1, .1, 1.5)) & 
+    theme(legend.position = "top",
+          legend.key.size = unit(.7, "lines"),
+          panel.spacing.x = unit(0, "lines"),
+          panel.grid.minor = element_blank(),
+          # plot.margin = margin(0.1, 0.1, 0.1, 0, "lines"),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,2963 @@
+---
+title: "Evaluate benchmark results comparing all datasets"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(svglite)
+
+outdir <- "overall_evaluations"
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"))
+
+library(SummarizedBenchmark)
+
+library(R.utils)
+library(data.table)
+library(qs)
+library(DT)
+
+library(ComplexHeatmap)
+library(scales)
+library(ggplot2)
+library(ggthemes)
+library(ggrepel)
+library(ggdendro)
+library(patchwork)
+
+library(BiocParallel)
+
+# library(ROCR)
+
+library(dendsort)
+library(seriation)
+
+#' A function to mimic the ggplot default palette
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+nWorkers <- multicoreWorkers()
+
+set.seed(104)
+```
+
+```{r}
+## compute statistics: CV(CPM), fraction of zeros, log2(average CPM), log2(variance(CPM))
+# x <- sbL$N05_bulk_de_01
+# x <- sbL$DM1$N03_bulk_de_01
+
+source("../utils/get_signal_to_noise_fn.R")
+source("../utils/get_signal_to_noise_fp.R")
+```
+
+```{r}
+## output file path
+output_dir <- "overall_evaluations"
+dir.create(path = output_dir, showWarnings = F, recursive = T)
+```
+
+```{r}
+sbAssay_dt_file <- file.path(output_dir, "sbAssay_dt.csv.gz")
+StN_FP_file <- file.path(output_dir, "StN_FP.csv.gz")
+StN_FN_file <- file.path(output_dir, "StN_FN.csv.gz")
+pval_deind_file <- file.path(output_dir, "pval_deind.csv.gz")
+
+if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
+  ## if either one of the two files is missing then load the required data
+  sumBench_perf_metrics_qs_files <- file.path("benchmark_results", 
+                                              c("DM1", "IPF", "MS", "IDC"), 
+                                              "sumBench_perf_metrics.qs")
+  
+  names(sumBench_perf_metrics_qs_files) <- sub("benchmark_results/", "",
+                                               dirname(sumBench_perf_metrics_qs_files))
+  
+  ## read input: the list of the SummarizedBenchmark objects after the performance evaluation 
+  # ncpus <- 50
+  # bpparam <- BatchtoolsParam(workers = length(sumBench_perf_metrics_qs_files), 
+  #                            saveregistry = F,
+  #                            cluster = "slurm",
+  #                            resources = list(ncpus = ncpus, 
+  #                                             walltime = 7200, # 2h max
+  #                                             memory = 1000) #64GB
+  # )
+  ncpus <- multicoreWorkers()
+  bpparam <- BiocParallel::SerialParam()
+  
+  sbL <- bplapply(sumBench_perf_metrics_qs_files, 
+                  qs::qread, 
+                  nthreads = ncpus,  #multicoreWorkers()
+                  BPPARAM = bpparam)
+  
+  if(!file.exists(sbAssay_dt_file)){
+    ## get the pre-computed performance data
+    sbAssay_all_dt <- 
+      rbindlist(lapply(sbL,
+                       function(sbL){
+                         rbindlist(lapply(sbL, 
+                                          function(x){
+                                            data.table(as.data.frame(colData(x)), 
+                                                       keep.rownames = "Method")
+                                          }), 
+                                   idcol = "Dataset")[, c("SetSize", "MZP", "DsType", 
+                                                          "DsId") := tstrsplit(Dataset, "_")]
+                       }
+      ), 
+      idcol = "Source_ds")
+    
+    fwrite(sbAssay_all_dt, sbAssay_dt_file)
+  }else{
+    sbAssay_all_dt <- fread(sbAssay_dt_file)
+  }
+  
+  if(!file.exists(StN_FP_file)){
+    stn_dt <- rbindlist(lapply(sbL, 
+                               function(x){
+                                 rbindlist(lapply(x, get_signal_to_noise), 
+                                           idcol = "setID")}), 
+                        idcol = "Source_ds")
+    
+    stn_dt[, c("SetSize", "MZP", "Purpose", "ID") := tstrsplit(setID, "_"), by = setID]
+    
+    ## save signal-to-noise statistics
+    fwrite(x = stn_dt, file = StN_FP_file)
+  }
+  else{
+    stn_dt <- fread(StN_FP_file)
+  }
+  
+  if(!file.exists(StN_FN_file)){
+    ## compute the signal to noise statistics of the FNs and save
+    stnfn_dt <- rbindlist(lapply(sbL, 
+                                 function(x)rbindlist(lapply(x, get_signal_to_noise_fn), 
+                                                      idcol = "setID")), 
+                          idcol = "Source_ds")
+    stnfn_dt[, c("SetSize", "MZP", "Purpose", "ID") := tstrsplit(setID, "_"), by = setID]
+    
+    fwrite(x = stnfn_dt, file = StN_FN_file)
+  }else{
+    stnfn_dt <- fread(StN_FN_file)
+  }
+  
+  if(!file.exists(pval_deind_file)){
+    pval_deind_dt <- 
+      rbindlist(lapply(sbL, 
+                       function(y) {
+                         rbindlist(lapply(y,
+                                          function(x) {
+                                            melt(data.table(true_val = as.integer(groundTruths(x)[["pv"]]),
+                                                            assays(x)[["pv"]]),
+                                                 id.vars = "true_val",
+                                                 value.name = "preds",
+                                                 variable.name = "Method")
+                                          }),
+                                   idcol = "Dataset")
+                       }), 
+                idcol = "Source_ds")
+    
+    pval_deind_dt[, c("SetSize", "MZP", "DsType", "DsId") := tstrsplit(Dataset, "_"), 
+                  by = Dataset]
+    
+    fwrite(pval_deind_dt, 
+           pval_deind_file, 
+           sep = "\t", row.names = F)
+    
+    # Performance metrics on P-values have been saved into the file <a href="`r pval_deind_file`">`r pval_deind_file`</a>.  
+  }else{
+    pval_deind_dt <- fread(pval_deind_file)
+  }
+  
+}else{
+  sbAssay_all_dt <- fread(sbAssay_dt_file)
+  stn_dt <- fread(StN_FP_file)
+  stnfn_dt <- fread(StN_FN_file)
+  pval_deind_dt <- fread(pval_deind_file)
+}
+```
+
+```{r}
+alpha_targets <- c(0.01, 0.05, 0.1) 
+```
+
+# Methods characteristics {.tabset}
+
+```{r}
+method_types <- 
+  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
+                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
+                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
+                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
+                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
+                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
+                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
+                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
+                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
+                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
+                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
+                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
+                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
+             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Single cell / metagenome"),
+             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
+                            "DESeq2", "DESeq2", "glmGamPoi", 
+                            "DESeq2", "DESeq2", "DESeq2", 
+                            "DESeq2", "DEsingle", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "limma", "lncDIFF", "MAST", 
+                            "metagenomeSeq", "monocle", "NBID", 
+                            "NBID", "NOISeqBIO", "PoissonSeq", 
+                            "ROTS", "SAMseq", "Seurat", 
+                            "Seurat", "Voom", "Voom", 
+                            "Voom", "Voom", "Voom", 
+                            "Voom", "Wilcoxon"))
+```
+
+```{r}
+method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+                          nm = sort(method_types$Method))
+
+method_types_colors.dt <- 
+  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+        method_types, 
+        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+
+method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+                                    method_types_colors.dt$BaseMethod))
+```
+
+## Colored base text
+
+```{r, fig.width=7, fig.height=2.5}
+plot_dt <- 
+  melt(copy(method_types)[, c("Base", "Parameters", 
+                              "Test") := tstrsplit(Method, "_")][, .(Method,
+                                                                     Type,
+                                                                     `Base tool` = BaseMethod,
+                                                                     Parameters,
+                                                                     Test)], 
+                id.vars = c("Method", "Type"))
+
+## Fix names
+plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
+plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
+plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
+plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
+plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
+plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
+plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
+
+plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
+plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
+plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
+plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
+
+plot_dt[variable == "Parameters", value := toupper(value)]
+
+plot_dt$variable <- factor(plot_dt$variable, 
+                           levels = rev(sort((levels(plot_dt$variable)))), 
+                           ordered = T)
+
+plot_base_method_color_text <-
+  ggplot(plot_dt[variable != "Test"], 
+         aes(x = Method,  
+             y = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            angle = 90, 
+            hjust = 0.3,  
+            size = 3) +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  facet_grid(rows = vars(variable),
+             scales = "free", 
+             space = "free", 
+             drop = T) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        panel.background = element_rect(fill = "transparent"),
+        strip.background = element_rect(fill = NA), 
+        strip.text = element_blank(),
+        plot.background = element_blank(),
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text
+```
+
+```{r}
+method_labels_table <- 
+  dcast(plot_dt[, .(Method, variable, value)], 
+      Method ~ variable)[, .(Method, 
+                             MethodLabel = paste(`Base tool`, 
+                                                 Parameters, #Test, 
+                                                 sep = "\t"))]
+```
+
+
+# Type I error data set
+
+```{r}
+sbAssay_dt <- sbAssay_all_dt[MZP == "bulk" & DsType == "mock"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+```
+
+```{r}
+colnames(sbAssay_dt) <- 
+  sub("R\\.3", "R_0.10", 
+      sub("R\\.2", "R_0.05", 
+          sub("R\\.1", "R_0.01", 
+              colnames(sbAssay_dt))))
+
+colnames(sbAssay_dt) <- 
+  sub("rejections\\.3", "rejections_0.10", 
+      sub("rejections\\.2", "rejections_0.05", 
+          sub("rejections\\.1", "rejections_0.01", 
+              colnames(sbAssay_dt))))
+
+colnames(sbAssay_dt) <- 
+  sub("\\.1$", "_padj", 
+      colnames(sbAssay_dt))
+```
+
+```{r}
+value_cols <-
+  c(grep("rejections", colnames(sbAssay_dt), value = T),
+    grep("TNR", colnames(sbAssay_dt), value = T))
+```
+
+## FPR - Source DS mean / median {.tabset}
+
+```{r}
+## compute the average value for each source data set
+msbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, mean, na.rm = T), 
+           .SDcols = value_cols,
+           by = .(Source_ds, SetSize, Method)]
+```
+
+```{r}
+## compute the median value for each source data set
+medsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, median, na.rm = T), 
+           .SDcols = value_cols,
+           by = .(Source_ds, SetSize, Method)]
+```
+
+### Table means
+
+```{r}
+show_dt <- 
+  dcast(melt(msbAssay_dt, 
+             id.vars = c("Source_ds", "SetSize", 
+                         "Method"))[grepl("^TNR", variable), 
+                                    `:=`(value = 1 - value)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                                   variable))][], 
+        Source_ds + SetSize + Method ~ variable, value.var = "value")
+
+show_dt <- merge(method_types, show_dt, by = "Method")
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$BaseMethod <- factor(show_dt$BaseMethod)
+show_dt$Type <- factor(show_dt$Type)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(sub("TNR", "FPR", gsub("_", " ", value_cols)), 3)
+```
+
+### Table medians
+
+```{r}
+show_dt <- 
+  dcast(melt(medsbAssay_dt, 
+             id.vars = c("Source_ds", "SetSize", 
+                         "Method"))[grepl("^TNR", variable), 
+                                    `:=`(value = 1 - value)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                                   variable))][], 
+        Source_ds + SetSize + Method ~ variable, value.var = "value")
+
+show_dt <- merge(method_types, show_dt, by = "Method")
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$BaseMethod <- factor(show_dt$BaseMethod)
+show_dt$Type <- factor(show_dt$Type)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(sub("TNR", "FPR", gsub("_", " ", value_cols)), 3)
+```
+
+## FPR - overall mean / median {.tabset}
+
+Fraction of circRNAs with P-value below the thresholds (0.01, or 0.05, or 0.10)\
+N.B: y-axis are square-root transformed for increased visibility
+
+### Table means
+
+```{r}
+value_cols <- 
+  c(grep("rejections", colnames(sbAssay_dt), value = T),
+    grep("TNR", colnames(sbAssay_dt), value = T))
+
+msbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, mean, na.rm = T), 
+             .SDcols = value_cols,
+             by = .(SetSize, Method)]
+```
+
+```{r}
+show_dt <- 
+  dcast(melt(msbAssay_dt, 
+             id.vars = c("SetSize", 
+                         "Method"))[grepl("^TNR", variable), 
+                                    `:=`(value = 1 - value)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                                   variable))][], 
+        SetSize + Method ~ variable, value.var = "value")
+
+show_dt <- merge(method_types, show_dt, by = "Method")
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$BaseMethod <- factor(show_dt$BaseMethod)
+show_dt$Type <- factor(show_dt$Type)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Means. Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(sub("TNR", "FPR", gsub("_", " ", value_cols)), 3)
+```
+
+### Table medians
+
+```{r}
+value_cols <- 
+  c(grep("rejections", colnames(sbAssay_dt), value = T),
+    grep("TNR", colnames(sbAssay_dt), value = T))
+
+mdsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, median, na.rm = T), 
+             .SDcols = value_cols,
+             by = .(SetSize, Method)]
+```
+
+```{r}
+show_dt <- 
+  dcast(melt(mdsbAssay_dt, 
+             id.vars = c("SetSize", 
+                         "Method"))[grepl("^TNR", variable), 
+                                    `:=`(value = 1 - value)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                                   variable))][], 
+        SetSize + Method ~ variable, value.var = "value")
+
+show_dt <- merge(method_types, show_dt, by = "Method")
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$BaseMethod <- factor(show_dt$BaseMethod)
+show_dt$Type <- factor(show_dt$Type)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(sub("TNR", "FPR", gsub("_", " ", value_cols)), 3)
+```
+
+### Median set size improve
+
+```{r, fig.width=6.692, fig.height=8.858, warning=FALSE}
+tnr_pattern <- "^TNR_0\\.[015]{2}$" 
+Alpha_plot_label <- "Alpha" #"P-value \U2264 \U003B1"
+
+plot_dt <- melt(mdsbAssay_dt, 
+                id.vars = c("SetSize",
+                            "Method"))[grepl(tnr_pattern, variable)]
+
+plot_dt[, variable := sub("TNR_", "", variable)]
+
+# plot_dt <- merge(method_types, plot_dt, by = "Method")
+# plot_dt$Method <- str_wrap(gsub("_", " ", plot_dt$Method), 10)
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- str_wrap(gsub("\t", "\n", plot_dt$MethodLabel), 10)
+
+
+ggplot(plot_dt, 
+       aes(x = SetSize, y = 1 - value)) + 
+  geom_hline(yintercept = 0.01, 
+             color = brewer_pal(palette = "Set2")(3)[1], #"grey30", 
+             linetype = "dashed") +
+  geom_hline(yintercept = 0.05, 
+             color = brewer_pal(palette = "Set2")(3)[2], #"grey30", 
+             linetype = "dashed") +
+  geom_hline(yintercept = 0.10, 
+             color = brewer_pal(palette = "Set2")(3)[3], #"grey30", 
+             linetype = "dashed") +
+  geom_line(aes(group = variable, color = variable)) +
+  geom_point(aes(shape = variable, color = variable), size = 2, fill = "white") +
+  labs(y = "FPR (median fraction of circRNAs with P \U2264 \U003B1)", x = NULL) +
+  scale_color_brewer(Alpha_plot_label, 
+                     palette = "Set2",
+                     labels = alpha_targets, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  scale_shape_manual(Alpha_plot_label, 
+                     labels = alpha_targets, 
+                     values = 21:23, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  facet_wrap(~ MethodLabel, #~ Method, 
+             scales = "fixed", ncol = 10) +
+  scale_y_sqrt(breaks = c(0, 0.01, 0.05, 0.1, 
+                          0.25, 0.5, 0.75, 1)) + ## square-root transformed y-axis for increased visibility
+  theme_bw() +
+  theme(legend.position = c(.9, .1), 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        text = element_text(size = 9),
+        strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
+        panel.spacing.x = unit(.1, "lines"),
+        panel.grid.major.x = element_blank())
+```
+
+### Clustered
+
+```{r}
+fpr_mat <- 
+  as.matrix(data.frame(dcast(data = sbAssay_dt[SetSize == "N05", 
+                                               .(Dataset = paste(Source_ds, Dataset), 
+                                                   Method, FPR = 1 - TNR_0.05)], 
+                             formula = Dataset ~ Method, 
+                             value.var = "FPR"), 
+                       row.names = "Dataset"))
+
+# fpr_dists <- dist(t(fpr_mat - 0.05), 
+#                   method = "euclidean")
+# 
+# fpr_clusts <- seriate(fpr_dists, method = "GW_complete")[[1]]
+
+dist_base_mat <- apply(X = fpr_mat, MARGIN = 2, FUN = quantile, na.rm = T, c(.25, .5, .75))
+fpr_dists <- dist(t(dist_base_mat), method = "canberra")
+fpr_dists[is.na(fpr_dists)] <- max(fpr_dists, na.rm = T)
+fpr_dists <- sqrt(fpr_dists)
+fpr_clusts <- seriate(fpr_dists, method = "OLO_complete")[[1]]
+```
+
+```{r}
+## prepare the dendrogram plot
+# plot(fpr_clusts)
+
+fpr_dendro_ddata <- 
+  dendro_data(as.dendrogram(fpr_clusts),
+              type = "rectangle")
+
+fpr_dendro <- 
+  ggplot(segment(fpr_dendro_ddata), aes(x = x, y = y)) +
+  geom_segment(aes(xend = xend, yend = yend)) +
+  scale_x_continuous(name = NULL, 
+                     trans = "reverse",
+                     breaks = label(fpr_dendro_ddata)$x, 
+                     labels = label(fpr_dendro_ddata)$label, 
+                     expand = c(0, 0),
+                     position = "bottom") +
+  # scale_y_reverse(name = NULL, expand = c(0, 0.00)) + 
+    # scale_y_sqrt() +
+  coord_cartesian(xlim = c(.5, 38.5)) +
+  labs(x = NULL, y = NULL) +
+  theme_dendro() +
+  theme(axis.text.x = element_text(color = method_colors[label(fpr_dendro_ddata)$label],
+                                   angle = 90, hjust = 1),
+        axis.text.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+  # theme()
+
+# fpr_dendro
+```
+
+
+```{r}
+## prepare the method-type color-coded boxes
+plot_dt <- copy(method_types)
+
+# plot_dt$Method <- as.integer(factor(plot_dt$Method, 
+#                                     levels = label(fpr_dendro_ddata)$label, 
+#                                     ordered = T))
+plot_dt$Method <- factor(plot_dt$Method, 
+                         levels = label(fpr_dendro_ddata)$label, 
+                         ordered = T)
+
+plot_base_method_type_tiles <-
+  ggplot(plot_dt, 
+         aes(x = Method, 
+             y = "", fill = Type)) +
+  geom_tile(color = "white", width = 0.9, height = 0.9, 
+            size = .5) +
+  labs(x = NULL, y = NULL) +
+  scale_fill_manual(values = setNames(tableau_color_pal(palette = "Classic Purple-Gray 6")(2), #"Nuriel Stone"
+                                      c("Bulk RNA-seq", "Single cell / metagenome"))) +
+  guides(fill = guide_legend(title = "Method purpose", 
+                             title.position = "left", 
+                             title.hjust = .5)) +
+  theme_dendro() +
+  theme(legend.position = "bottom")
+
+# plot_base_method_type_tiles
+```
+
+```{r, fig.width=14.5, fig.height=8.5}
+idvars <- c("SetSize", "Method")
+plot_dt <- melt(sbAssay_dt[, c(idvars, 
+                               grep(tnr_pattern, 
+                                    colnames(sbAssay_dt), 
+                                    value = T)), with = F], 
+                id.vars = idvars)
+
+plot_dt$Alpha <- sub("TNR_", "", plot_dt$variable)
+
+plot_dt <- merge(method_types, plot_dt, by = "Method")
+
+rejections_pval_pattern <- "rejections_0\\.[015]{2}$"
+
+n_points <- 
+  melt(sbAssay_dt[, c(idvars, 
+                      grep(rejections_pval_pattern, 
+                           colnames(sbAssay_dt), 
+                           value = T)), 
+                  with = F], 
+       id.vars = idvars)
+
+n_points$Alpha <- sub("rejections_", "", n_points$variable)
+
+n_points <- n_points[!is.na(value), .N, by = .(SetSize, Method, Alpha)]
+
+n_points <- merge(method_types, n_points, by = "Method")
+
+plot_dt$Method <- factor(plot_dt$Method,
+                         levels = label(fpr_dendro_ddata)$label,
+                         ordered = T)
+
+fpr_dendro_ordered_plot <- 
+  ggplot(plot_dt[Alpha == 0.05 & SetSize == "N05"], 
+         aes(x = Method, 
+             y = 1 - value, 
+             color = Method)) +
+  geom_hline(data = unique(plot_dt[, c("SetSize", "Alpha"), 
+                                   with = F])[Alpha == 0.05 & SetSize == "N05"], 
+             aes(yintercept = as.numeric(Alpha)), 
+             linetype = "dashed") +
+  geom_boxplot(outlier.size = .5, varwidth = T) + 
+  # geom_point(data = n_points[Alpha == 0.05 & SetSize == "N05"], 
+  #          aes(fill = N, size = N, y = 1.2), 
+  #          color = "black",
+  #          shape = 21) +
+  scale_fill_viridis_c("Instances", 
+                       breaks = sort(unique(n_points[Alpha == 0.05 & SetSize == "N05", N])),
+                       guide = guide_legend(ncol = 1, title.vjust = 0.5, 
+                                            title.position = "top", label.vjust = .5),
+                       begin = .70, end = .95,
+                       option = "C") +
+  # scale_size_continuous("Instances", 
+  #                       breaks = sort(unique(n_points[Alpha == 0.05 & SetSize == "N05", N])),
+  #                       guide = guide_legend(ncol = 1, title.vjust = 0.5, 
+  #                                           title.position = "top", label.vjust = .5),
+  #                       # breaks = c(30, 90, 120),
+  #                       range = c(2, 3)) +
+  labs(y = "FPR", x = NULL) +
+  # scale_color_discrete(guide = "none") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_shape_discrete(Alpha_plot_label, labels = alpha_targets) +
+  scale_y_sqrt(breaks = c(0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1)) +
+  theme_bw() +
+  theme(#axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+    axis.text.x = element_blank(),
+    panel.spacing.x = unit(.1, "lines"), 
+    legend.box.margin = unit(c(-0.5, 0, -.5, 0), "lines"),
+    legend.margin = margin(0, 0, 0, 0, "pt"),
+    legend.background = element_blank(),
+    # legend.position = "top", 
+    legend.position = c(.9, .65), 
+    panel.grid.major.x = element_blank(), 
+    panel.grid.minor.x = element_blank(), 
+    panel.grid.minor.y = element_blank())
+```
+
+## Characteristics of FP {.tabset}
+
+### Signal-to-noise
+
+(mean(DECs) - mean(notDECs)) / (sd(DECs) + sd(notDECs))  
+A positive statistic indicates that the corresponding characteristic is more pronounced in the set if circRNAs called significant. 
+The statistics are computed only for the methods calling >= 5 DECs.  
+
+### StN + bars N05
+
+```{r, fig.height=6, fig.width=6.692}
+# plot_dt <- copy(stn_dt)[SetSize == "N05" & Purpose == "mock", .(Source_ds, Method, Val, StN)]
+# 
+# ds_with_fp <- 
+#   copy(stn_dt)[SetSize == "N05" & Purpose == "mock",
+#                .(Source_ds, Method, Val,
+#                  StN, setID)][!is.na(StN), .N, 
+#                               by = .(Source_ds, Method, 
+#                                      setID)][, .N, by = .(Source_ds, Method)][, .(Source_ds, Method, 
+#                                                                                   Val = "Data sets w/FP",
+#                                                                                   StN = N)]
+# 
+# plot_dt <- 
+#   rbindlist(list(Measures = plot_dt, 
+#                  FalsePositives = ds_with_fp), 
+#             use.names = T, idcol = "Datatype")
+# 
+# plot_dt <- merge(method_types, plot_dt, by = "Method", 
+#                  all.x = T)[is.na(StN), `:=`(StN = 0, 
+#                                              Val = "Data sets w/FP", 
+#                                              Datatype = "FalsePositives")]
+# 
+# plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+# plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+#                       levels = c("CV(CPM)", "Fraction zeros", 
+#                                  "Average CPM", "Variance CPM", 
+#                                  "Data sets w/FP"), 
+#                       ordered = T)
+```
+
+## FPR + Signal-to-noise + namebox N05 {.tabset}
+
+### Clustered 
+
+```{r, fig.height=8.858, fig.width=6.692}
+n_points <- 
+  copy(stn_dt)[SetSize == "N05" & Purpose == "mock",
+               .(Source_ds, Method, Val,
+                 StN, setID)][!is.na(StN), .N, 
+                              by = .(Source_ds, Method, 
+                                     setID)][, .N, by = .(Source_ds, Method)][, .(Source_ds, Method, 
+                                                                                  Val = "Instances",
+                                                                                  StN = N)]
+n_points$Method <- 
+  factor(n_points$Method,
+         levels = label(fpr_dendro_ddata)$label,
+         ordered = T)
+
+n_points$Val <- factor(capitalize(n_points$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM",
+                                 "Instances"), 
+                      ordered = T)
+##############
+
+plot_dt <- copy(stn_dt)[SetSize == "N05" & Purpose == "mock", .(Source_ds, Method, Val, StN)]
+
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM",
+                                 "Instances"), 
+                      ordered = T)
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(Val = "Fraction zeros")]
+
+plot_dt$Method <- factor(plot_dt$Method,
+                         levels = label(fpr_dendro_ddata)$label,
+                         ordered = T)
+
+plot_stn_clustered <- 
+  ggplot(plot_dt, 
+         aes(x = Method, y = StN)) +
+  geom_hline(aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(aes(color = Method), 
+               outlier.size = .5, 
+               varwidth = F) + 
+  geom_col(data = n_points,
+           aes(fill = Source_ds),
+           position = position_stack()) +
+  labs(x = NULL, y = "Signal-to-noise statistics (DECs / not DECs)") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "left",
+                                          # title.hjust = .5,
+                                          title.vjust = 1,
+                                          nrow = 1)) +
+  # scale_x_discrete(guide = guide_axis(angle = 90)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free_y", 
+             # space = "free_x",
+             drop = F) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+        legend.position = c(.235, .155), 
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# plot_stn_clustered
+```
+
+# Figure null data set evaluations
+
+```{r, fig.height=8.85, fig.width=6.69}
+## wrap all panels
+method_order <- label(fpr_dendro_ddata)$label
+
+bottom_box <- 
+  plot_base_method_color_text +
+     facet_grid(cols = NULL, rows = vars(variable), 
+                scales = "free_y", drop = T) +
+     scale_x_discrete(limits = method_order) +
+     theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+           axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+           strip.text = element_blank()) 
+
+fpr_dendro_wrap_plot <- 
+  wrap_plots(wrap_plots(fpr_dendro +
+                            # scale_x_discrete(limits = method_order) + 
+                            theme_void() + 
+                            theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
+                        plot_base_method_type_tiles +
+                            scale_x_discrete(limits = method_order) + 
+                            theme_void() + 
+                          theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
+                        ncol = 1, heights = c(1, .25),
+                        guides = "collect") & 
+               theme(legend.position = "top"), 
+             fpr_dendro_ordered_plot +
+                 scale_x_discrete(limits = method_order) + 
+                 theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+                       axis.ticks.x = element_blank(),
+                       panel.grid.minor.y = element_blank()), 
+             plot_stn_clustered  +
+                 scale_x_discrete(limits = method_order) + 
+                 theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+                       axis.text.x = element_blank()),
+             # colored_method_text + theme_void() + 
+             #     theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
+             bottom_box +
+                 scale_x_discrete(limits = method_order),
+             ncol = 1, 
+             heights = c(1.5, 2, 7.5, 4)) &
+  # theme(text = element_text(size = 10))
+    theme(plot.margin = margin(0, .5, 0, .5, "lines"),
+          legend.key.size = unit(.7, "lines"),
+          legend.box.margin = margin(0, 0, 0.5, 0, "lines"),
+          legend.box.spacing = unit(0, "lines"),
+          legend.margin = margin(0, 0, 0, 0, "lines"),
+          legend.spacing.y = unit(.1, "lines"),
+          panel.spacing.x = unit(.05, "lines"),
+          panel.grid.minor = element_blank(),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+  
+
+fpr_dendro_wrap_plot
+```
+
+# DE data sets
+
+```{r}
+sbAssay_dt <- sbAssay_all_dt[DsType == "de" & MZP == "bulk"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+```
+
+## Performance
+
+```{r}
+colnames(sbAssay_dt) <- 
+  sub("R\\.3", "R_0.10", 
+      sub("R\\.2", "R_0.05", 
+          sub("R\\.1", "R_0.01", 
+              colnames(sbAssay_dt))))
+
+colnames(sbAssay_dt) <- 
+  sub("rejections\\.3", "rejections_0.10", 
+      sub("rejections\\.2", "rejections_0.05", 
+          sub("rejections\\.1", "rejections_0.01", 
+              colnames(sbAssay_dt))))
+
+colnames(sbAssay_dt) <- 
+  sub("([015])\\.1$", "\\1_padj", 
+      colnames(sbAssay_dt))
+```
+
+```{r}
+value_cols <- 
+  c(grep("rejections", colnames(sbAssay_dt), value = T),
+    grep("TPR", colnames(sbAssay_dt), value = T),
+    grep("TNR", colnames(sbAssay_dt), value = T),
+    grep("FDR", colnames(sbAssay_dt), value = T))
+```
+
+```{r}
+rejections_pval_pattern <- "rejections_0\\.[015]{2}$"
+
+idvars <- c("SetSize", "Method")
+n_points <- 
+  melt(sbAssay_dt[, c(idvars, 
+                      grep(rejections_pval_pattern, 
+                           colnames(sbAssay_dt), 
+                           value = T)), 
+                  with = F], 
+       id.vars = idvars)
+
+n_points$Alpha <- sub("rejections_", "", n_points$variable)
+
+n_points <- n_points[!is.na(value), .N, by = .(SetSize, Method, Alpha)]
+
+n_points <- merge(method_types, n_points, by = "Method")
+```
+
+### Tables  {.tabset}
+#### Table - Source set mean
+
+```{r}
+## mean by data set
+msbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, mean, na.rm = T), 
+           .SDcols = value_cols,
+           by = .(Source_ds, SetSize, Method)]
+
+## number of not NA results
+nSuxMsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, function(x)sum(!is.na(x))), 
+           .SDcols = value_cols,
+           by = .(Source_ds, SetSize, Method)]
+```
+
+Mean by source dataset and set size
+
+```{r}
+show_dt <- copy(msbAssay_dt)
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 3)
+```
+
+Number of valid (i.e. not NA) results
+
+```{r}
+show_dt <- copy(nSuxMsbAssay_dt)
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 0)
+```
+
+#### Table - Source set median
+
+```{r}
+## median by data set
+medsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, median, na.rm = T), 
+           .SDcols = value_cols,
+           by = .(Source_ds, SetSize, Method)]
+```
+
+```{r}
+show_dt <- copy(medsbAssay_dt)
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 3)
+```
+
+#### Table - Overall mean
+
+```{r}
+## overall mean 
+omsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, mean, na.rm = T), 
+           .SDcols = value_cols,
+           by = .(SetSize, Method)]
+
+## number of not NA results
+nSuxOmSbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, function(x)sum(!is.na(x))), 
+           .SDcols = value_cols,
+           by = .(SetSize, Method)]
+```
+
+Mean by set size (mean across all data set sources)
+
+```{r}
+show_dt <- copy(omsbAssay_dt)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 3)
+```
+
+Number of valid (i.e. not NA) results (across all data set sources)
+
+```{r}
+show_dt <- copy(nSuxOmSbAssay_dt)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 0)
+```
+
+#### Table - Overall median
+
+```{r}
+## overall mean 
+omedsbAssay_dt <- 
+  sbAssay_dt[, lapply(.SD, median, na.rm = T), 
+             .SDcols = value_cols,
+             by = .(SetSize, Method)]
+```
+
+Median by set size (median across all data set sources)
+
+```{r}
+show_dt <- copy(omedsbAssay_dt)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+colnames(show_dt) <- gsub("_", " ", colnames(show_dt))
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          caption = paste("Alphas:", paste(alpha_targets, collapse = "/")),
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(gsub("_", " ", value_cols), 3)
+```
+
+### FDR {.tabset}
+
+```{r}
+## format result data for the plots
+id_vars <- c("SetSize", "DsId", "Method")
+
+fdr_pattern <- "^FDR_0\\.[015]{2}_padj"
+plot_dt <- 
+  melt(sbAssay_dt[, c(value_cols, id_vars), with = F], 
+       id.vars = id_vars)[grepl(fdr_pattern, 
+                                    variable, 
+                                    perl = F)]
+
+plot_dt[, variable := gsub("FDR|_|padj", "", variable)]
+
+n_points <-
+  plot_dt[!is.na(value), .(N = .N),
+          by = .(SetSize, variable, Method)]
+
+# plot_dt[is.na(value), value := 1]
+
+Alpha_plot_label <- "Alpha"#"P-adj \U2264"
+```
+
+#### Setsize improve
+
+```{r, fig.width=6.692, fig.height=8.858, warning=FALSE}
+plot_dt <- melt(omedsbAssay_dt, 
+                id.vars = c("SetSize",
+                            "Method"))[grepl(fdr_pattern, variable)]
+
+plot_dt[, variable := sub("FDR|_|padj", "", variable)]
+
+# plot_dt <- merge(method_types, plot_dt, by = "Method")
+# plot_dt$Method <- str_wrap(gsub("_", " ", plot_dt$Method), 10)
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- str_wrap(gsub("\t", " ", plot_dt$MethodLabel), 10)
+
+
+ggplot(plot_dt, 
+       aes(x = SetSize, y = value)) + 
+  geom_hline(yintercept = 0.01, 
+             color = brewer_pal(palette = "Set2")(3)[1], #"grey30", 
+             linetype = "dashed") +
+  geom_hline(yintercept = 0.05, 
+             color = brewer_pal(palette = "Set2")(3)[2], #"grey30", 
+             linetype = "dashed") +
+  geom_hline(yintercept = 0.10, 
+             color = brewer_pal(palette = "Set2")(3)[3], #"grey30", 
+             linetype = "dashed") +
+  geom_line(aes(group = variable, color = variable)) +
+  geom_point(aes(shape = variable, color = variable), size = 2, fill = "white") +
+  labs(y = "Median FDR", x = NULL) +
+  scale_color_brewer(Alpha_plot_label, 
+                     palette = "Set2",
+                     labels = alpha_targets, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  scale_shape_manual(Alpha_plot_label, 
+                     labels = alpha_targets, 
+                     values = 21:23, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  facet_wrap(~ MethodLabel, #Method, 
+             scales = "fixed", ncol = 10) +
+  scale_y_sqrt(breaks = c(0, 0.01, 0.05, 0.1, 
+                          0.25, 0.5, 0.75, 1)) + ## square-root transformed y-axis for increased visibility
+  theme_bw() +
+  theme(legend.position = c(.9, .1), 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        text = element_text(size = 9),
+        strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
+        panel.spacing.x = unit(.1, "lines"),
+        panel.grid.major.x = element_blank())
+```
+
+
+```{r}
+#### FDR with bars
+## format result data for the plots
+id_vars <- c("SetSize", "DsId", "Method", "Source_ds")
+
+plot_dt <- 
+  melt(sbAssay_dt[, c(grep("^FDR_0\\.[015]{2}_padj", 
+                           value_cols, value = T,
+                           perl = F), id_vars), with = F], 
+       id.vars = id_vars)
+plot_dt[, variable := gsub("FDR|_|padj", "", variable)]
+
+Alpha_plot_label <- "P-adj \U2264"
+
+# plot_dt[is.na(value), value := 1]
+
+plot_dt <- plot_dt[SetSize == "N05" & variable == 0.05]
+
+
+
+plot_dt <- merge(method_types, 
+                 plot_dt, 
+                 by = "Method", all.x = T)
+
+n_points <-
+  plot_dt[!is.na(value), .(N = .N),
+          by = .(SetSize, Source_ds, Alpha = variable, Method)]
+n_points <- merge(method_types,
+                  n_points,
+                  by = "Method", all.x = T)
+
+plot_fdr <- 
+  ggplot(plot_dt, 
+         aes(x = Method, y = value)) +
+  geom_hline(aes(yintercept = .05), 
+             linetype = "dashed") +
+  geom_boxplot(aes(color = Method),
+               outlier.size = .5) +
+    scale_color_manual(values = method_colors, guide = "none") +
+    scale_y_sqrt(breaks = c(0, .01, .05, .1, .25, .5, .75, 1)) +
+    labs(y = "FDP",
+       x = NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+          legend.position = "top", 
+          legend.key = element_blank(),
+          legend.background = element_blank(),
+          legend.margin = margin(0, 0, 0, 0, "lines"),
+          legend.box.spacing = unit(1, "lines"),
+          legend.box.margin = margin(0, 0, -0.5, 0, "lines"),
+          legend.spacing.y = unit(.1, "lines"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank())
+
+plot_fdr_bars <- 
+    ggplot(data = n_points, 
+           aes(x = Method, y = N,
+               fill = Source_ds)) +
+    geom_col() +
+    scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                       guide = guide_legend(title.position = "left",
+                                            # title.hjust = .5,
+                                            title.vjust = .5,
+                                            nrow = 1)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    coord_cartesian(ylim = c(0, 120)) +
+    labs(y = "Instances",
+         x = NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+          legend.position = "top", 
+          legend.key = element_blank(),
+          legend.background = element_blank(),
+          legend.margin = margin(0, 0, 0, 0, "lines"),
+          legend.box.spacing = unit(1, "lines"),
+          legend.box.margin = margin(0, 0, -0.5, 0, "lines"),
+          legend.spacing.y = unit(.1, "lines"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank())
+
+
+bottom_box <- 
+  plot_base_method_color_text +
+     facet_grid(cols = NULL, rows = vars(variable), 
+                scales = "free_y", drop = T) +
+     theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+           axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+           strip.text = element_blank()) 
+
+plot_fdr_with_top_bars <- 
+    wrap_plots(plot_fdr_bars +
+                   theme(axis.text.x = element_blank(),
+                         axis.ticks.x = element_blank()),
+               plot_fdr +
+                   theme(axis.text.x = element_blank(),
+                         axis.ticks.x = element_blank()), 
+               bottom_box,
+               ncol = 1, 
+               heights = c(.5, 2, 3), 
+               guides = "collect") &
+    theme(legend.position = "top")
+
+# plot_fdr_with_top_bars
+```
+
+#### Clustered
+
+```{r}
+set.seed(12345)
+fdr_mat <- 
+  as.matrix(data.frame(dcast(data = sbAssay_dt[SetSize == "N05", 
+                                               .(Dataset = paste(Source_ds, Dataset), 
+                                                 Method, FDR = FDR_0.05_padj)], 
+                             formula = Dataset ~ Method, 
+                             value.var = "FDR"), 
+                       row.names = "Dataset"))
+```
+
+
+```{r}
+p.val <- list()
+for(i in 1:ncol(fdr_mat)){
+    p.val[i] <- tryCatch(expr = t.test(fdr_mat[, i], 
+                                       mu = .05)$p.value, 
+                         error = function(e)NA)
+}
+names(p.val) <- colnames(fdr_mat)
+
+datatable(data.frame(Pvalue = unlist(p.val)), 
+          caption = "T-test for difference from 0.05") %>%
+    formatRound("Pvalue", 4)
+```
+
+
+```{r}
+# fdr_mat[is.na(fdr_mat)] <- 1
+# fdr_mat[is.na(fdr_mat)] <- Inf
+
+# dist_base_mat <- (fdr_mat - 0.05)
+# dist_base_mat <- t(apply(X = fdr_mat, MARGIN = 2, FUN = median, na.rm = T)) - 0.05
+# dist_base_mat <- rescale(dist_base_mat, to = c(-1, 1))
+dist_base_mat <- apply(X = fdr_mat, MARGIN = 2, FUN = quantile, na.rm = T, c(.25, .5, .75)) 
+# dist_base_mat <- rbind(dist_base_mat, rescale(apply(is.na(fdr_mat), 2, sum), to = c(0, 1)))
+# dist_base_mat <- scale(fdr_mat,
+#                        center = rep_len(0.05, dim(fdr_mat)[2]),
+#                        scale = F)
+# dist_base_mat <- fdr_mat
+# dist_base_mat <- rescale(fdr_mat - 0.05, to = c(0, 1))
+# dist_base_mat <- apply(fdr_mat - 0.05, 2, rescale, to = c(-1, 1))
+
+fdr_dists <- dist(t(dist_base_mat), method = "canberra")
+# fdr_dists <- dist(t(dist_base_mat), method = "minkowski", p = 2)
+# fdr_dists <- dist(t(dist_base_mat), method = "manhattan")
+# fdr_dists <- dist(t(dist_base_mat), method = "euclidean")
+# fdr_dists <- cluster::daisy(t(dist_base_mat), metric = "gower", stand = F)
+
+## set the NAs as very distant
+fdr_dists[is.na(fdr_dists)] <- max(fdr_dists, na.rm = T) #+ min(fdr_dists, na.rm = T)
+fdr_dists <- sqrt(fdr_dists)
+
+# fdr_clusts <- dendsort(hclust(d = fdr_dists, method = "ward.D2"),
+#                        isReverse = T,
+#                        type = "min")
+
+# fdr_clusts <- dendsort(as.dendrogram(seriate(fdr_dists, method = "OLO")[[1]]),
+#                        isReverse = T, 
+#                        type = "min") #GW_ward
+fdr_clusts <- seriate(fdr_dists, method = "OLO_complete")[[1]]
+
+fdr_dendro_ddata <- 
+  dendro_data(as.dendrogram(fdr_clusts),
+              type = "rectangle")
+
+fdr_dendro <- 
+  ggplot(segment(fdr_dendro_ddata), aes(x = x, y = y)) +
+  geom_segment(aes(xend = xend, yend = yend)) +
+  scale_x_continuous(name = NULL, 
+                     trans = "reverse",
+                     breaks = label(fdr_dendro_ddata)$x, 
+                     labels = label(fdr_dendro_ddata)$label, 
+                     expand = c(0, 0),
+                     position = "bottom") +
+  coord_cartesian(xlim = c(.5, 38.5)) +
+  labs(x = NULL, y = NULL) +
+  theme_dendro() +
+  # theme(axis.text.x = element_text(color = method_colors[label(fdr_dendro_ddata)$label], 
+  #                                  angle = 90, hjust = 1),
+  #       axis.text.y = element_blank(),
+  #       panel.grid.major.x = element_blank(),
+  #       panel.grid.minor.x = element_blank(),
+  #       panel.grid.major.y = element_blank(),
+  #       panel.grid.minor.y = element_blank())
+  theme()
+
+# fdr_dendro
+```
+
+```{r, fig.width=6.692, fig.height=6.5}
+# method_order <- label(fdr_dendro_ddata)$label
+# 
+# panel_dendro <-
+#   wrap_plots(fdr_dendro +
+#                theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+#                      axis.text.x = element_blank()),
+#              plot_base_method_type_tiles + 
+#                scale_x_discrete(limits = method_order, breaks = method_order) +
+#                theme_void() + 
+#                theme(plot.margin = margin(0, 0, 0, 0, "lines")),  
+#              ncol = 1, heights = c(1, .25),
+#              guides = "collect") & 
+#   theme(legend.position = "top")
+# 
+# panel_fdr <- 
+#   plot_fdr_faceted + 
+#   facet_grid(cols = NULL) +
+#   scale_x_discrete(limits = method_order) +
+#   theme(axis.text.x = element_blank(), 
+#         axis.ticks.x = element_blank(),
+#         strip.text = element_blank())
+# 
+# bottom_box <- 
+#   plot_base_method_color_text +
+#      facet_grid(cols = NULL, rows = vars(variable), 
+#                 scales = "free_y", drop = T) +
+#      scale_x_discrete(limits = method_order) +
+#      theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+#            axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+#            strip.text = element_blank()) 
+# 
+# wrap_plots(panel_dendro & 
+#              theme(legend.position = "top"),
+#            plot_fdr_with_top_bars &
+#                scale_x_discrete(limits = method_order) &
+#              theme(legend.position = "bottom"), 
+#            heights = c(1, 4), 
+#            guides = "collect",
+#            ncol = 1)  & 
+#   theme(#legend.position = "top",
+#         panel.spacing.x = unit(.05, "lines"),
+#         panel.grid.minor = element_blank(),
+#         plot.margin = margin(0, .5, 0, .5, "lines"),
+#         text = element_text(size = 10), 
+#         plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+```
+
+### Recall (TPR) {.tabset}
+
+#### N05, beta = 0.05
+
+```{r}
+## format result data for the plots
+id_vars <- c("SetSize", "DsId", "Method")
+
+tpr_pattern <- "^TPR_0\\.[015]{2}_padj"
+
+plot_dt <- 
+  melt(sbAssay_dt[, c(value_cols, id_vars), with = F], 
+       id.vars = id_vars)[grepl(tpr_pattern, 
+                                    variable, 
+                                    perl = F)]
+
+plot_dt[, variable := gsub("TPR|_|padj", "", variable)]
+
+Alpha_plot_label <- "Alpha" #"P-adj \U2264"
+
+n_points <- plot_dt[!is.na(value), .N, by = .(SetSize, variable, Method)]
+n_points$y <- 1.3
+```
+
+```{r, fig.width=7, fig.height=4}
+## Avg TPR
+plot_tpr <- 
+    ggplot(plot_dt[SetSize == "N05" & variable == 0.05],
+           aes(x = Method, y = value, color = Method)) +
+    geom_boxplot(outlier.size = .5, varwidth = F) + 
+    # geom_text(data = n_points[SetSize == "N05" & variable == 0.05], 
+    #           aes(y = 1.25,
+    #               label = paste0("n = ", formatC(N, width = 3, format = "d", flag = "0"), " ")), 
+    #           angle = 90, color = "black",
+    #           hjust = "inward", #0
+    #           vjust = .5, 
+    #           fontface = "italic", size = 3) +
+    labs(x = NULL, y = "TPR") +
+    scale_color_discrete(guide = "none") +
+    scale_shape_discrete("Source data set") +
+    scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+          panel.grid.major.x = element_blank(),
+          legend.position = "top")
+
+# plot_tpr +
+#     geom_text(data = n_points[SetSize == "N05" & variable == 0.05],
+#           aes(y = 1.25,
+#               label = paste0("n = ", formatC(N, width = 3, format = "d", flag = "0"), " ")),
+#           angle = 90, color = "black",
+#           hjust = "inward", #0
+#           vjust = .5,
+#           fontface = "italic", size = 3) +
+#     labs(x = NULL, y = "TPR at adjusted P = 0.05")
+```
+
+#### Setsize improve
+
+```{r, fig.width=6.692, fig.height=8.858, warning=FALSE}
+plot_dt <- melt(omedsbAssay_dt, 
+                id.vars = c("SetSize",
+                            "Method"))[grepl(tpr_pattern, variable)]
+
+plot_dt[, variable := sub("TPR|_|padj", "", variable)]
+
+# plot_dt <- merge(method_types, plot_dt, by = "Method")
+# plot_dt$Method <- str_wrap(gsub("_", " ", plot_dt$Method), 10)
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- str_wrap(gsub("\t", " ", plot_dt$MethodLabel), 10)
+
+## Avg FPR = 1 - TNR
+ggplot(plot_dt, 
+       aes(x = SetSize, y = value)) + 
+  geom_line(aes(group = variable, color = variable)) +
+  geom_point(aes(shape = variable, color = variable), size = 2, fill = "white") +
+  labs(y = "Median TPR", x = NULL) +
+  scale_color_brewer(Alpha_plot_label, 
+                     palette = "Set2",
+                     labels = alpha_targets, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  scale_shape_manual(Alpha_plot_label, 
+                     labels = alpha_targets, 
+                     values = 21:23, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  facet_wrap(~ MethodLabel, #Method, 
+             scales = "fixed", ncol = 10) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  theme_bw() +
+  theme(legend.position = c(.9, .1), 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        text = element_text(size = 9),
+        strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
+        panel.spacing.x = unit(.1, "lines"),
+        panel.grid.minor.x = element_blank(), 
+        panel.grid.major.x = element_blank())
+```
+
+#### Clustered
+
+```{r}
+tpr_l_dt <-
+    sbAssay_dt[SetSize == "N05",
+               .(Dataset = paste(Source_ds, Dataset),
+                   Method, TPR = TPR_0.05_padj)]
+
+tpr_mat <-
+  as.matrix(data.frame(dcast(data = tpr_l_dt,
+                             formula = Dataset ~ Method,
+                             value.var = "TPR"),
+                       row.names = "Dataset"))
+
+```
+
+```{r, fig.width=6.692, fig.height=4.25}
+# method_order <- label(tpr_dendro_ddata)$label
+# method_order <- names(sort(apply(X = tpr_mat, MARGIN = 2, FUN = median, na.rm = T)))
+
+method_order <-
+    dcast(as.data.table(summary(tpr_mat))[, c("Stat", "Val"):=tstrsplit(N, ":", type.convert = T)],
+          V2 ~ Stat, value.var = "Val")[order(`Median `, `1st Qu.`, `3rd Qu.`,
+                                              decreasing = F), gsub(" ", "", V2)]
+
+panel_dendro <-
+  wrap_plots(#tpr_dendro +
+               # theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+               #       axis.text.x = element_blank()),
+             plot_base_method_type_tiles + 
+               scale_x_discrete(limits = method_order, breaks = method_order) +
+               theme_void() + 
+               theme(plot.margin = margin(0, 0, 0, 0, "lines")),  
+             ncol = 1, heights = c(1, .2),
+             guides = "collect") & 
+  theme(legend.position = "top")
+
+# panel_tpr <- 
+#   plot_tpr_faceted + 
+#   facet_grid(cols = NULL) +
+#   scale_x_discrete(limits = method_order) +
+#   theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+#         axis.text.x = element_blank(), 
+#         axis.ticks.x = element_blank(),
+#         strip.text = element_blank())
+
+bottom_box <- 
+    plot_base_method_color_text +
+    facet_grid(cols = NULL, rows = vars(variable), 
+               scales = "free_y", drop = T) +
+    scale_x_discrete(limits = method_order) +
+    theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+          axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+          strip.text = element_blank()) 
+
+wrap_plots(panel_dendro & 
+               theme(legend.position = "top"),
+           plot_tpr &
+               scale_x_discrete(limits = method_order) &
+               theme(legend.position = "bottom",
+                     axis.text.x = element_blank()), 
+           bottom_box &
+               scale_x_discrete(limits = method_order),
+           heights = c(.5, 2, 3), 
+           guides = "collect",
+           ncol = 1)  & 
+    theme(#legend.position = "top",
+        plot.margin = margin(0, .5, 0, .5, "lines"),
+        legend.key.size = unit(.7, "lines"),
+        legend.position = "top", legend.box = "vertical", 
+        legend.box.margin = margin(0, 0, 0, 0, "lines"),
+        legend.box.spacing = unit(0, "lines"),
+        legend.margin = margin(0, 0, 0, 0, "lines"),
+        legend.spacing.y = unit(.1, "lines"),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 10),
+        plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+```
+
+### Characteristics of the false negatives {.tabset}
+
+#### Signal-to-noise false negatives
+
+(mean(FN DECs) - mean(TP DECs)) / (sd(FN DECs) + sd(TP DECs))  
+A positive statistic indicates that the corresponding characteristic is more pronounced in the set of truly DE circRNAs not called as significant. 
+The statistics are computed only for the methods missing >= 5 DECs and identifying >= 1 DECs.  
+
+#### StN + bars N03
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N03", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+
+plot_stn <- 
+  ggplot(plot_dt, 
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"), 
+               aes(color = Method, 
+                   # y = signed_log2(StN)
+                   ),  
+               outlier.size = .5, 
+               varwidth = F) + 
+  geom_col(data = ~ subset(.x, Datatype == "FalsePositives"), 
+           aes(fill = Source_ds)) +
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  # scale_y_continuous() +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "left", #"top", 
+                                          # title.hjust = .5,
+                                          # ncol = 1 
+                                          title.vjust = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        # legend.position = c(1.035, -.2), 
+        legend.position = "top",
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# plot_stn
+wrap_plots(plot_stn + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text +
+             # scale_y_discrete(position = "right") +
+             theme(plot.background = element_blank()), 
+           ncol = 1, heights = c(4, 2))
+```
+
+#### StN + bars N03 Zoomed scale
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N03", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+
+
+plot_stn_boxes <- 
+  ggplot(plot_dt[Val != "Instances"], 
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"), 
+               aes(color = Method, 
+                   # y = signed_log2(StN)
+                   ),  
+               outlier.size = .5, 
+               varwidth = F) + 
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "top", 
+                                          # title.hjust = .5, 
+                                          title.vjust = 1,
+                                          ncol = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90), limits = sort(names(method_colors))) +
+    coord_cartesian(ylim = c(-3, 2.5)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        legend.position = c(-.035, -.2), 
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+wrap_plots(plot_stn_boxes + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text, 
+           ncol = 1, heights = c(4, 2))
+```
+
+#### StN + bars N05
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N05", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+
+
+plot_stn <-
+  ggplot(plot_dt,
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0),
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"),
+               aes(color = Method,
+                   # y = signed_log2(StN)
+                   ),
+               outlier.size = .5,
+               varwidth = F) +
+  geom_col(data = ~ subset(.x, Datatype == "FalsePositives"),
+           aes(fill = Source_ds)) +
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  # scale_y_continuous() +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "left", #"top", 
+                                          # title.hjust = .5,
+                                          # ncol = 1 
+                                          title.vjust = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        # legend.position = c(1.035, -.2), 
+        legend.position = "top",
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# plot_stn
+wrap_plots(plot_stn + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text +
+             # scale_y_discrete(position = "right") +
+             theme(plot.background = element_blank()), 
+           ncol = 1, heights = c(4, 2))
+```
+
+#### StN + bars N05 Zoomed scale
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N05", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+
+
+plot_stn_boxes <- 
+  ggplot(plot_dt[Val != "Instances"], 
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"), 
+               aes(color = Method, 
+                   # y = signed_log2(StN)
+                   ),  
+               outlier.size = .5, 
+               varwidth = F) + 
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "top", 
+                                          # title.hjust = .5, 
+                                          title.vjust = 1,
+                                          ncol = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90), limits = sort(names(method_colors))) +
+    coord_cartesian(ylim = c(-3, 2.5)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        legend.position = c(-.035, -.2), 
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+wrap_plots(plot_stn_boxes + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text, 
+           ncol = 1, heights = c(4, 2))
+```
+
+#### StN + bars N10
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N10", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+plot_stn <- 
+  ggplot(plot_dt, 
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"), 
+               aes(color = Method, 
+                   # y = signed_log2(StN)
+                   ),  
+               outlier.size = .5, 
+               varwidth = F) + 
+  geom_col(data = ~ subset(.x, Datatype == "FalsePositives"), 
+           aes(fill = Source_ds)) +
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  # scale_y_continuous() +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "left", #"top", 
+                                          # title.hjust = .5,
+                                          # ncol = 1 
+                                          title.vjust = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        # legend.position = c(1.035, -.2), 
+        legend.position = "top",
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# plot_stn
+wrap_plots(plot_stn + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text +
+             # scale_y_discrete(position = "right") +
+             theme(plot.background = element_blank()), 
+           ncol = 1, heights = c(4, 2))
+```
+
+#### StN + bars N10 Zoomed scale
+
+```{r, fig.height=6, fig.width=6.692}
+plot_dt <- copy(stnfn_dt)[SetSize == "N10", .(Source_ds, Method, Val, StN)]
+
+plot_dt <- 
+  rbindlist(list(Measures = plot_dt, 
+                 FalsePositives = unique(plot_dt[, .N, 
+                                                 by = .(Method, Val, 
+                                                        Source_ds)][, .(Source_ds, Method, 
+                                                                        Val = "Instances", 
+                                                                        StN = N)])), 
+            use.names = T, idcol = "Datatype")
+
+plot_dt <- merge(method_types, plot_dt, by = "Method", 
+                 all.x = T)[is.na(StN), `:=`(StN = 0, 
+                                             Val = "Instances", 
+                                             Datatype = "FalsePositives")]
+
+plot_dt$Method <- factor(plot_dt$Method, levels = method_types$Method)
+plot_dt$Val <- factor(capitalize(plot_dt$Val), 
+                      levels = c("CV(CPM)", "Fraction zeros", 
+                                 "Average CPM", "Variance CPM", 
+                                 "Instances"), 
+                      ordered = T)
+
+
+plot_stn_boxes <- 
+  ggplot(plot_dt[Val != "Instances"], 
+         aes(x = Method, y = StN)) +
+  geom_hline(data = ~ subset(.x, Datatype == "Measures"), ##  & StN <= 2  & StN >= -2 NB: the output is truncated
+             aes(yintercept = 0), 
+             linetype = "dashed") +
+  geom_boxplot(data = ~ subset(.x, Datatype == "Measures"), 
+               aes(color = Method, 
+                   # y = signed_log2(StN)
+                   ),  
+               outlier.size = .5, 
+               varwidth = F) + 
+  labs(x = NULL, y = "Signal-to-noise statistics (FNs / TPs)") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_fill_tableau(name = "Origin", direction = -1, na.translate = F,
+                     guide = guide_legend(title.position = "top", 
+                                          # title.hjust = .5, 
+                                          title.vjust = 1,
+                                          ncol = 1)) +
+  scale_x_discrete(guide = guide_axis(angle = 90), limits = sort(names(method_colors))) +
+    coord_cartesian(ylim = c(-3, 2.5)) +
+  facet_grid(rows = vars(Val), 
+             # cols = vars(Type),
+             scales = "free", 
+             space = "free_x",
+             drop = T) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = NA),
+        legend.position = c(-.035, -.2), 
+        legend.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.key.size = unit(.7, "lines"),
+        text = element_text(size = 10),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.spacing.y = unit(.15, "lines"),        
+        panel.grid.major.x = element_blank(), 
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+wrap_plots(plot_stn_boxes + 
+               theme(axis.text.x = element_blank(), 
+                     # axis.ticks.x = element_blank(), 
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           plot_base_method_color_text, 
+           ncol = 1, heights = c(4, 2))
+```
+
+
+### F-scores
+
+```{r}
+## auxiliary functions
+
+simple_auc <- function(TPR, FPR){
+    # inputs already sorted, best scores first 
+    dFPR <- c(diff(FPR), 0)
+    dTPR <- c(diff(TPR), 0)
+    sum(TPR * dFPR) + sum(dTPR * dFPR)/2
+}
+
+## can be used to compute F1 and other F-scores, such as F0.5 (beta = 0.5)
+f.beta <- function(P, R, beta = 1) {
+    (1 + beta^2) * ( (P * R) / ( (beta^2 * P) + R) )
+}
+
+## compute F1 score from precision and recall
+f1 <- function(P, R) {
+    # 2 * ((P * R)/(P + R))
+    f.beta(P, R, beta = 1)
+}
+```
+
+```{r, fig.width=14.5}
+## F1-score
+ds_id_cols <- c("Source_ds", "SetSize", "Method", "DsId", "Dataset")
+
+fdr_tpr <- 
+  melt(sbAssay_dt[, c(value_cols, ds_id_cols), with = F], 
+       id.vars = ds_id_cols)[grepl("^FDR_0\\.[015]{2}_padj|^TPR_0\\.[015]{2}_padj", 
+                                   variable, 
+                                   perl = F)]
+
+f1s <- 
+  merge(fdr_tpr[grepl("^FDR_0\\.[015]{2}_padj", 
+                      variable)][, `:=`(FDR = value, 
+                                        Alpha = gsub("FDR|_|padj", "", variable))][, `:=`(variable = NULL,
+                                                                                          value = NULL)][],
+        fdr_tpr[grepl("^TPR_0\\.[015]{2}_padj", 
+                      variable)][, `:=`(TPR = value, 
+                                        Alpha = gsub("TPR|_|padj", "", variable))][, `:=`(variable = NULL,
+                                                                                          value = NULL)][],
+        by = c(ds_id_cols, "Alpha"))
+
+f1s[, `:=`(F1 = f1(1 - FDR, TPR),
+           F0.5 = f.beta(1 - FDR, TPR, .5))] 
+
+## add the number of rejections
+rej_pattern <- "^rejections_0\\.[015]{2}_padj"
+
+f1s <- 
+  merge(f1s, 
+        melt(sbAssay_dt[, c(ds_id_cols,
+                          grep(rej_pattern, colnames(sbAssay_dt), value = T)), with = F], 
+             id.vars = ds_id_cols, 
+             value.name = "rejections",
+             variable.name = "Alpha")[, Alpha := gsub("rejections|_|padj", "", Alpha)][],
+        by = c(ds_id_cols, "Alpha"))
+
+# f1s[is.nan(F1), F1 := 0]
+# f1s[is.nan(F0.5), F0.5 := 0]
+```
+
+#### Tables {.tabset}
+##### Mean by source dataset
+
+```{r}
+## compute mean values
+mf1s <- f1s[, .(F1 = mean(F1, na.rm = T),
+                sdF1 = sd(F1, na.rm = T),
+                F0.5 = mean(F0.5, na.rm = T),
+                sdF0.5 = sd(F0.5, na.rm = T),
+                TPR = mean(TPR, na.rm = T),
+                sdTPR = sd(TPR, na.rm = T),
+                FDR = mean(FDR, na.rm = T),
+                sdFDR = sd(FDR, na.rm = T),
+                frac_failed = mean(rejections == 0 | is.na(rejections)),
+                n_failed = sum(rejections == 0 | is.na(rejections)),
+                rejections = mean(rejections, na.rm = T)), 
+            by = .(Source_ds, SetSize, Method, Alpha)]
+```
+
+```{r}
+show_dt <- copy(mf1s)
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$Alpha <- factor(show_dt$Alpha)
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(c("F1", "sdF1", 
+                "F0.5", "sdF0.5", 
+                "TPR", "sdTPR", 
+                "FDR", "sdFDR", 
+                "rejections", "frac_failed"), 3)
+```
+
+##### Median by source dataset
+
+```{r}
+## compute mean values
+medf1s <- f1s[, .(F1 = median(F1, na.rm = T),
+                  F0.5 = median(F0.5, na.rm = T),
+                  TPR = median(TPR, na.rm = T),
+                  FDR = median(FDR, na.rm = T)),
+              by = .(Source_ds, SetSize, Method, Alpha)]
+```
+
+```{r}
+show_dt <- copy(medf1s)
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$Alpha <- factor(show_dt$Alpha)
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(c("F1", "F0.5", "TPR", "FDR"), 3)
+```
+
+##### Overall mean
+
+```{r}
+## compute mean values
+omf1s <- f1s[, .(F1 = mean(F1, na.rm = T),
+                 sdF1 = sd(F1, na.rm = T),
+                 F0.5 = mean(F0.5, na.rm = T),
+                 sdF0.5 = sd(F0.5, na.rm = T),
+                 TPR = mean(TPR, na.rm = T),
+                 sdTPR = sd(TPR, na.rm = T),
+                 FDR = mean(FDR, na.rm = T),
+                 sdFDR = sd(FDR, na.rm = T),
+                 frac_failed = mean(rejections == 0 | is.na(rejections)),
+                 n_failed = sum(rejections == 0 | is.na(rejections)),
+                 rejections = mean(rejections, na.rm = T)), 
+             by = .(SetSize, Method, Alpha)]
+```
+
+```{r}
+show_dt <- copy(omf1s)
+# show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$Alpha <- factor(show_dt$Alpha)
+
+datatable(show_dt,
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(c("F1", "sdF1", 
+                "F0.5", "sdF0.5", 
+                "TPR", "sdTPR", 
+                "FDR", "sdFDR", 
+                "rejections", "frac_failed"), 3)
+```
+
+##### Overall median
+
+```{r}
+## compute mean values
+omedf1s <- f1s[, .(F1 = median(F1, na.rm = T),
+                 F0.5 = median(F0.5, na.rm = T),
+                 TPR = median(TPR, na.rm = T),
+                 FDR = median(FDR, na.rm = T)), 
+             by = .(SetSize, Method, Alpha)]
+```
+
+```{r}
+show_dt <- copy(omedf1s)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+show_dt$Alpha <- factor(show_dt$Alpha)
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(c("F1", "F0.5", "TPR", "FDR"), 3)
+```
+
+#### F1 {.tabset}
+
+##### N05, beta = 0.05
+
+```{r, fig.width=7, fig.height=4.5}
+plot_dt <- copy(f1s)[, value := F1]
+plot_dt <- plot_dt[SetSize == "N05" & Alpha == 0.05]
+
+Alpha_plot_label <- "Alpha" #"P-adj \U2264"
+
+plot_dt <- merge(method_types, 
+                 plot_dt, 
+                 by = "Method")
+
+n_points <-
+  plot_dt[!is.na(F1), .(value = .N),
+          by = .(SetSize, Alpha, Method)]
+# n_points$y <- 1.3
+n_points <- merge(method_types,
+                  n_points,
+                  by = "Method", all.x = T)
+# n_points[is.na(N), value := 0]
+
+plot_dt <- 
+  rbindlist(list(F1 = plot_dt, 
+                 Counts = n_points[SetSize == "N05" & Alpha == 0.05, 
+                                   .(Method, Type, BaseMethod, SetSize, 
+                                     Alpha, value)]), #, Source_ds
+            use.names = T, fill = T,
+            idcol = "Measure")
+
+
+```
+
+
+```{r, fig.width=7, fig.height=4.5}
+plot_f1 <- 
+  ggplot(plot_dt,
+         aes(x = Method, y = value, color = Method)) +
+  geom_boxplot(data = ~ subset(.x, Measure == "F1"),
+               outlier.size = .5, varwidth = F) + 
+  labs(x = NULL, y = expression(F[1]*"-score")) +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        panel.grid.major.x = element_blank(),
+        legend.position = "top", 
+        legend.key = element_blank(),
+        legend.background = element_blank(),
+        legend.margin = margin(0, 0, 0, 0, "lines"),
+        legend.box.spacing = unit(1, "lines"),
+        legend.box.margin = margin(0, 0, -0.5, 0, "lines"),
+        legend.spacing.y = unit(.1, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_f1
+```
+
+##### Median sorted patchwork
+
+```{r, fig.width=14.5}
+plot_dt <- copy(f1s)[, value := F1]
+
+Alpha_plot_label <- "Alpha" #"P-adj \U2264"
+
+plot_dt <- merge(method_types, 
+                 plot_dt, 
+                 by = "Method")
+
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+
+method_labels_pad <-
+  copy(method_labels_table)[, c("Tool", 
+                                "Params"):=tstrsplit(MethodLabel, 
+                                                   "\t")][, .(Method,
+                                                              Tool = str_pad(Tool, max(str_length(Tool)), 
+                                                                             side = "right"),
+                                                              Params = str_pad(Params, max(str_length(Params)), 
+                                                                               side = "right"))][, .(Method,
+                                                                                                    MethodLabelPad = paste(Tool, Params))]
+
+# plot_dt$MethodLabel <- gsub("\t", " ", plot_dt$MethodLabel)
+```
+
+```{r, fig.width=14.5}
+method_order <- omedf1s[SetSize == "N03" & Alpha == 0.05][order(F1, na.last = F), Method]
+
+p0.05N03 <- 
+  wrap_plots(ggplot(plot_dt[SetSize == "N03"], 
+                    aes(x = Method, y = F1, color = Method)) +
+               geom_boxplot(outlier.size = .5, varwidth = F) + 
+               scale_color_manual(values = method_colors, guide = NULL) +
+               labs(y = expression(Average~F[1]), x = NULL) +
+               facet_grid(cols = vars(SetSize), 
+                          rows = vars(Alpha), scales = "free_y") +
+               scale_x_discrete(limits = method_order, 
+                                labels = data.frame(method_labels_pad, 
+                                                    row.names = "Method")[method_order, "MethodLabelPad"]) +
+               scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+               theme_bw() +
+               theme(axis.text.x = element_blank(),
+                     # axis.text.x = element_text(angle = 90, 
+                     #                            family = "mono",
+                     #                            colour = method_colors[method_order], 
+                     #                            hjust = 1, vjust = .5),
+                     panel.grid.minor.x = element_blank(),
+                     panel.grid.major.x = element_blank(),
+                     legend.position = "top"),
+             plot_base_method_color_text + 
+               scale_x_discrete(limits = method_order),
+             ncol = 1, 
+             heights = c(1, .5))
+
+# p0.05N03
+```
+
+```{r, fig.width=14.5}
+method_order <- omedf1s[SetSize == "N05" & Alpha == 0.05][order(F1, na.last = F), Method]
+
+p0.05N05 <- 
+    wrap_plots(ggplot(plot_dt[SetSize == "N05"], 
+                    aes(x = Method, y = F1, color = Method)) +
+               geom_boxplot(outlier.size = .5, varwidth = F) + 
+               scale_color_manual(values = method_colors, guide = NULL) +
+               labs(y = expression(Average~F[1]), x = NULL) +
+               facet_grid(cols = vars(SetSize), 
+                          rows = vars(Alpha), scales = "free_y") +
+               scale_x_discrete(limits = method_order, 
+                                labels = data.frame(method_labels_pad, 
+                                                    row.names = "Method")[method_order, "MethodLabelPad"]) +
+               scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+               theme_bw() +
+               theme(axis.text.x = element_blank(),
+                     # axis.text.x = element_text(angle = 90, 
+                     #                            family = "mono",
+                     #                            colour = method_colors[method_order], 
+                     #                            hjust = 1, vjust = .5),
+                     panel.grid.minor.x = element_blank(),
+                     panel.grid.major.x = element_blank(),
+                     legend.position = "top"),
+             plot_base_method_color_text + 
+               scale_x_discrete(limits = method_order) +
+               theme(axis.text.y = element_blank()),
+             ncol = 1, 
+             heights = c(1, .5))
+
+# p0.05N05
+```
+
+```{r, fig.width=14.5}
+method_order <- omedf1s[SetSize == "N10" & Alpha == 0.05][order(F1, na.last = F), Method]
+
+p0.05N10 <- 
+  wrap_plots(ggplot(plot_dt[SetSize == "N10"], 
+                    aes(x = Method, y = F1, color = Method)) +
+               geom_boxplot(outlier.size = .5, varwidth = F) + 
+               scale_color_manual(values = method_colors, guide = NULL) +
+               labs(y = expression(Average~F[1]), x = NULL) +
+               facet_grid(cols = vars(SetSize), 
+                          rows = vars(Alpha), scales = "free_y") +
+               scale_x_discrete(limits = method_order, 
+                                labels = data.frame(method_labels_pad, 
+                                                    row.names = "Method")[method_order, "MethodLabelPad"]) +
+               scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
+               coord_cartesian(ylim = c(0, 1)) +
+               theme_bw() +
+               theme(axis.text.x = element_blank(),
+                     # axis.text.x = element_text(angle = 90, 
+                     #                            family = "mono",
+                     #                            colour = method_colors[method_order], 
+                     #                            hjust = 1, vjust = .5),
+                     panel.grid.minor.x = element_blank(),
+                     panel.grid.major.x = element_blank(),
+                     legend.position = "top"),
+             plot_base_method_color_text + 
+               scale_x_discrete(limits = method_order) +
+               theme(axis.text.y = element_blank(),
+                     panel.background = element_rect(fill = NULL)),
+             ncol = 1, 
+             heights = c(1, .5))
+
+# p0.05N10
+```
+
+```{r, fig.width=14.5, fig.height=7}
+wrap_plots(p0.05N03 & 
+             labs(x = NULL, y = NULL) &
+             theme(strip.background.y = element_blank(),
+                   strip.text.y = element_blank(),
+                   panel.grid.minor = element_blank(),
+                   plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   panel.grid.major.x = element_blank()),
+           p0.05N05 &
+             labs(x = NULL, y = NULL) &
+             theme(axis.text.y = element_blank(),
+                   axis.ticks.y = element_blank(),
+                   panel.grid.minor = element_blank(),
+                   strip.background.y = element_blank(),
+                   strip.text.y = element_blank(),
+                   plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   panel.grid.major.x = element_blank()),
+           p0.05N10 &
+             labs(x = NULL, y = NULL) &
+             theme(axis.text.y = element_blank(),
+                   axis.ticks.y = element_blank(),
+                   panel.grid.minor = element_blank(),
+                   plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   panel.grid.major.x = element_blank()),
+           nrow = 1)
+```
+
+##### Setsize improve
+
+```{r, fig.width=6.692, fig.height=8.858, warning=FALSE}
+plot_dt <- melt(omedf1s, 
+                id.vars = c("SetSize", "Method", 
+                            "Alpha"))[variable == "F1"]
+
+# plot_dt <- merge(method_types, plot_dt, by = "Method")
+# plot_dt$Method <- str_wrap(gsub("_", " ", plot_dt$Method), 10)
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- str_wrap(gsub("\t", " ", plot_dt$MethodLabel), 10)
+
+## Avg FPR = 1 - TNR
+ggplot(plot_dt, 
+       aes(x = SetSize, y = value)) + 
+  geom_line(aes(group = Alpha, color = Alpha)) +
+  geom_point(aes(shape = Alpha, color = Alpha), size = 2, fill = "white") +
+  labs(y = expression(Median~F[1]*~score), x = NULL) +
+  scale_color_brewer(Alpha_plot_label, 
+                     palette = "Set2",
+                     labels = alpha_targets, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  scale_shape_manual(Alpha_plot_label, 
+                     labels = alpha_targets, 
+                     values = 21:23, 
+                     guide = guide_legend(title.position = "top", 
+                                          reverse = T)) +
+  facet_wrap(~ MethodLabel, #Method, 
+             scales = "fixed", ncol = 10) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  theme_bw() +
+  theme(legend.position = c(.9, .1), 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        text = element_text(size = 9),
+        strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
+        panel.spacing.x = unit(.1, "lines"),
+        panel.grid.minor.x = element_blank(), 
+        panel.grid.major.x = element_blank())
+```
+
+
+# P-values distribution {.tabset}
+
+## N03
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- copy(pval_deind_dt)[SetSize == "N03" & DsType == "de"][is.na(preds), preds := 1]
+
+plot_dt$Pval.bins <- cut(plot_dt$preds, breaks = seq(0, 1, by = .05),
+                         include.lowest = T, ordered_result = T)
+
+plot_dt <- plot_dt[, .N, by = .(SetSize, Source_ds, Method, Dataset, Pval.bins)]
+
+plot_dt[, Frac := N/sum(N), by = .(SetSize, Source_ds, Method, Dataset)]
+
+plot_dt <- plot_dt[, .(Mean = mean(Frac),
+                       SE = sqrt(var(Frac) / length(Frac))),
+                   by = .(SetSize, Method, Pval.bins)]
+
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- gsub("\t", " ", plot_dt$MethodLabel)
+
+ggplot(plot_dt, aes(x = Pval.bins, y = Mean * 100)) +
+    geom_col(fill = "lightblue", color = "grey50") +
+    geom_errorbar(aes(ymin = (Mean - SE) * 100, ymax = (Mean + SE) * 100),
+                  color = "black", width = .75) +
+    facet_wrap(facets = ~ MethodLabel, #Method, 
+               ncol = 5, scales = "free_y") +
+    theme_bw() +
+    labs(x = "P values", y = "Fraction (%)") +
+    theme(axis.text.x = element_text(angle = 90, vjust = .5, size = 5),
+          axis.text.y = element_text(size = 6),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 7))
+```
+
+## N05
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- copy(pval_deind_dt)[SetSize == "N05" & DsType == "de"][is.na(preds), preds := 1]
+
+plot_dt$Pval.bins <- cut(plot_dt$preds, breaks = seq(0, 1, by = .05),
+                         include.lowest = T, ordered_result = T)
+
+plot_dt <- plot_dt[, .N, by = .(SetSize, Source_ds, Method, Dataset, Pval.bins)]
+
+plot_dt[, Frac := N/sum(N), by = .(SetSize, Source_ds, Method, Dataset)]
+
+plot_dt <- plot_dt[, .(Mean = mean(Frac),
+                       SE = sqrt(var(Frac) / length(Frac))),
+                   by = .(SetSize, Method, Pval.bins)]
+
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- gsub("\t", " ", plot_dt$MethodLabel)
+
+ggplot(plot_dt, aes(x = Pval.bins, y = Mean * 100)) +
+    geom_col(fill = "lightblue", color = "grey50") +
+    geom_errorbar(aes(ymin = (Mean - SE) * 100, ymax = (Mean + SE) * 100),
+                  color = "black", width = .75) +
+    facet_wrap(facets = ~ MethodLabel, #Method, 
+               ncol = 5, 
+               scales = "free_y") +
+    theme_bw() +
+    labs(x = "P values", y = "Fraction (%)") +
+    theme(axis.text.x = element_text(angle = 90, vjust = .5, size = 5),
+          axis.text.y = element_text(size = 6),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 7))
+```
+
+## N10
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- copy(pval_deind_dt)[SetSize == "N10" & DsType == "de"][is.na(preds), preds := 1]
+
+plot_dt$Pval.bins <- cut(plot_dt$preds, breaks = seq(0, 1, by = .05), 
+                         include.lowest = T, ordered_result = T)
+
+plot_dt <- plot_dt[, .N, by = .(SetSize, Source_ds, Method, Dataset, Pval.bins)]
+
+plot_dt[, Frac := N/sum(N), by = .(SetSize, Source_ds, Method, Dataset)]
+
+plot_dt <- plot_dt[, .(Mean = mean(Frac),
+                       SE = sqrt(var(Frac) / length(Frac))),
+                   by = .(SetSize, Method, Pval.bins)]
+
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+plot_dt$MethodLabel <- gsub("\t", " ", plot_dt$MethodLabel)
+
+ggplot(plot_dt, aes(x = Pval.bins, y = Mean * 100)) +
+    geom_col(fill = "lightblue", color = "grey50") +
+    geom_errorbar(aes(ymin = (Mean - SE) * 100, ymax = (Mean + SE) * 100), 
+                  color = "black", width = .75) +
+    facet_wrap(facets = ~ MethodLabel,#Method, 
+               ncol = 5, scales = "free_y") +
+    theme_bw() +
+    labs(x = "P values", y = "Fraction (%)") +
+    theme(axis.text.x = element_text(angle = 90, vjust = .5, size = 5),
+          axis.text.y = element_text(size = 6),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 7))
+```
+
+
+# Performance curves
+
+```{r}
+# install.packages("PRROC", Ncpus=12)
+# library(PRROC)
+
+get_aucpr <- function(preds, trueval, sorted = T){
+
+  preds[is.na(preds)] <- 0
+  # res <- PerfMeas::precision.at.all.recall.levels(scores = preds, 
+  #                                                 labels = trueval)
+  # PerfMeas::AUPRC(list(res), comp.precision = TRUE)
+  PRROC::pr.curve(scores.class0 = preds, 
+                  weights.class0 = trueval, 
+                  sorted = sorted)$auc.davis.goadrich
+  
+}
+
+get_auc <- function(preds, trueval, sorted = T){
+  
+  preds[is.na(preds)] <- 0
+  # PerfMeas::AUC.single(pred = preds, labels = trueval)
+  PRROC::roc.curve(scores.class0 = preds, 
+                  weights.class0 = trueval, 
+                  sorted = sorted)$auc
+}
+
+scores_trueval <- copy(pval_deind_dt)[DsType == "de"]
+scores_trueval[is.na(preds), preds := 1]
+
+## count how many datasets the method failed/crashed
+n_ds_crash <- 
+  dcast(pval_deind_dt[DsType == "de", .(n_failed = sum(is.na(preds)), 
+                       n_circs = length(preds)),
+                   by = .(Source_ds, SetSize, DsId, 
+                          Method)][, .N, by = .(Source_ds, SetSize, Method, #DsId, 
+                                                Status = ifelse(n_failed == n_circs, 
+                                                                "FAILED", "GOOD"))],
+        Source_ds + SetSize + Method ~ Status, 
+        value.var = "N", 
+        fill = 0)
+
+auprc_auroc <- 
+  scores_trueval[order(preds), #!is.na(preds), 
+                 .(AUCPR = get_aucpr(1 - preds, true_val, sorted = T),
+                   # rocr_AUCPR = rocr_get_aucpr(1 - preds, true_val),
+                   # rocr_AUC = rocr_get_auc(1 - preds, true_val),
+                   AUROC = get_auc(1 - preds, true_val, sorted = T)), 
+                 by = .(Source_ds, SetSize, DsId, Method)]
+```
+
+```{r}
+## save area under curve
+auc_file <- file.path(output_dir, "overall_auc.csv.gz")
+fwrite(x = auprc_auroc, file = auc_file, row.names = F, sep = "\t")
+```
+
+AUC computed values have been saved into <a href="`r auc_file`">`r auc_file`</a>.
+
+## Area under precision-recall curve {.tabset}
+
+### Table - source ds
+
+```{r}
+show_dt <- 
+  auprc_auroc[, .(`Mean AUCPR` = mean(AUCPR),
+                  `Median AUCPR` = median(AUCPR),
+                  `Sd AUCPR` = sd(AUCPR),
+                  `Min AUCPR` = min(AUCPR),
+                  `Max AUCPR` = max(AUCPR)),
+              by = .(Source_ds, SetSize, Method)]
+
+show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+
+datatable(show_dt, 
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(grep(pattern = "Source_ds|SetSize|Method", 
+                   x = colnames(show_dt), 
+                   value = T, invert = T), digits = 3)
+```
+
+### Table - set size
+
+```{r}
+show_dt <- 
+  auprc_auroc[, .(`Mean AUCPR` = mean(AUCPR),
+                  `Median AUCPR` = median(AUCPR),
+                  `Sd AUCPR` = sd(AUCPR),
+                  `Min AUCPR` = min(AUCPR),
+                  `Max AUCPR` = max(AUCPR)),
+              by = .(SetSize, Method)]
+
+# show_dt$Source_ds <- factor(show_dt$Source_ds)
+show_dt$SetSize <- factor(show_dt$SetSize)
+show_dt$Method <- factor(show_dt$Method)
+
+datatable(show_dt,
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          rownames = F, filter = "top") %>%
+  formatRound(grep(pattern = "Source_ds|SetSize|Method", 
+                   x = colnames(show_dt), 
+                   value = T, invert = T), digits = 3)
+```
+
+### N05
+
+```{r, fig.width=7, fig.height=4}
+plot_dt <- auprc_auroc[SetSize == "N05"]
+n_points <- n_ds_crash[SetSize == "N05", .(N = sum(GOOD)), by = .(SetSize, Method)]
+n_points$y <- 1.3
+
+plot_aupr <- 
+    ggplot(plot_dt,
+           aes(x = Method, y = AUCPR, color = Method)) +
+    geom_boxplot(outlier.size = .5, varwidth = T) + 
+    scale_color_manual(values = method_colors, guide = "none") +
+    labs(x = NULL, y = "AUPRC") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          legend.position = "top")
+
+# plot_aupr +
+#     geom_text(data = n_points, 
+#               aes(y = y,
+#                   label = paste0("n = ", formatC(N, width = 3, format = "d", flag = "0"), " ")), 
+#               angle = 90, color = "black",
+#               hjust = "inward", #0
+#               vjust = .5, 
+#               fontface = "italic", size = 3) +
+#     scale_y_continuous(breaks = c(0, .25, .5, .75, 1), expand = c(0, 0)) +
+#     coord_cartesian(ylim = c(0, unique(n_points$y)))
+```
+
+
+### Setsize improve
+
+```{r, fig.width=6.692, fig.height=8.858}
+# plot_dt <- merge(method_types, auprc_auroc, by = "Method")
+# plot_dt$Method <- str_wrap(gsub("_", " ", plot_dt$Method), 10)
+plot_dt <- merge(method_labels_table, auprc_auroc, by = "Method")
+plot_dt$MethodLabel <- str_wrap(gsub("\t", " ", plot_dt$MethodLabel), 10)
+
+ggplot(plot_dt, 
+       aes(x = SetSize, y = AUCPR, color = Method)) + 
+    geom_boxplot(outlier.size = .5) +
+    labs(x = "Data set size", y = "Area under precision-recall curve") +
+    scale_color_manual(values = method_colors, 
+                       guide = "none") +
+    facet_wrap(~ MethodLabel, #Method, 
+               scales = "fixed", ncol = 10) +
+    scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    theme_bw() +
+    theme(legend.position = c(.9, .1), 
+          axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+          text = element_text(size = 9),
+          strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
+          panel.spacing.x = unit(.1, "lines"),
+          panel.grid.minor.x = element_blank(), 
+          panel.grid.major.x = element_blank())
+```
+
+
+# Wrap {.tabset}
+
+## Clustered
+
+```{r, fig.width=6.692, fig.height=7}
+method_order <- label(fdr_dendro_ddata)$label
+
+panel_bars <- plot_fdr_bars +
+    scale_x_discrete(limits = method_order) +
+    theme(legend.position = "top",
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+
+panel_a <- plot_fdr +
+    scale_x_discrete(limits = method_order) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+               
+panel_b <- plot_tpr +
+  scale_x_discrete(limits = method_order) +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        strip.text = element_blank())
+
+panel_c <- plot_f1 + 
+  scale_x_discrete(limits = method_order) +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        strip.text = element_blank())
+
+panel_d <- plot_aupr +
+  scale_x_discrete(limits = method_order) +
+  theme(axis.text.x = element_blank(), 
+        # axis.ticks.x = element_blank(),
+        strip.text = element_blank())
+
+# panel_e <- plot_auroc +
+#   scale_x_discrete(limits = method_order) +
+#     scale_y_continuous(breaks = c(0, .25, .5, .75, 1), 
+#                        trans = "exp") +
+#   theme(axis.text.x = element_blank(), 
+#         # axis.ticks.x = element_blank(),
+#         strip.text = element_blank())
+
+bottom_box <- 
+  plot_base_method_color_text +
+     facet_grid(cols = NULL, rows = vars(variable), 
+                scales = "free_y", drop = T) +
+     scale_x_discrete(limits = method_order) +
+     theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+           axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+           strip.text = element_blank()) 
+
+wrap_plots(fdr_dendro +
+             # scale_y_reverse() +
+             theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+                   axis.text.x = element_blank()), 
+           plot_base_method_type_tiles + 
+             scale_x_discrete(limits = method_order, breaks = method_order) +
+             theme_void() + 
+             theme(plot.margin = margin(0, 0, 0, 0, "lines")),
+           panel_bars, 
+           panel_a, 
+           panel_b,
+           panel_c,
+           panel_d,
+           # panel_e,
+           bottom_box, 
+           heights = c(.5, .15, .6, 1, 1, 
+                       1, 1, #1, 
+                       2.5), 
+           guides = "collect",
+           ncol = 1) &
+  theme(plot.margin = margin(0, .5, 0, .5, "lines"),
+        legend.key.size = unit(.7, "lines"),
+        legend.position = "top", legend.box = "vertical", 
+        legend.box.margin = margin(0, 0, 0, 0, "lines"),
+        legend.box.spacing = unit(0, "lines"),
+        legend.margin = margin(0, 0, 0, 0, "lines"),
+        legend.spacing.y = unit(.1, "lines"),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 10), 
+        plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+```
+
+# Running times {.tabset}
+
+## Set size
+
+
+```{r, fig.width=14.5, fig.height=5.5}
+plot_dt <- sbAssay_dt[, Seconds := ifelse(grepl("_ZW_", Method), Runtime.2, 
+                                          Runtime.1)][, .(MeanSeconds = mean(Seconds, na.rm = T)), 
+                                                      by = .(SetSize, Method)]
+
+method_names <- sort(unique(plot_dt$Method))
+method_colors <- setNames(hue_pal()(length(method_names)), method_names)
+
+
+method_order <- plot_dt[order(MeanSeconds), unique(Method)]
+
+plot_dt$Method <- factor(plot_dt$Method, 
+                         levels = method_order, 
+                         ordered = T)
+
+cputime_plot <-
+    ggplot(plot_dt, 
+           aes(x = Method, y = MeanSeconds, color = Method)) +
+    geom_point(aes(shape = SetSize)) +
+    labs(x = NULL, y = "Running time (seconds)") +
+    scale_color_manual(values = method_colors, guide = "none") +
+    scale_shape_manual(name = "Set size", values = 21:23) +
+    scale_y_sqrt(breaks = c(0, 0.1, 1, 10, 30, 60, 120, 240, 360, 480, 1000, 1800)) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, 
+                                     color = method_colors[levels(plot_dt$Method)]),
+          panel.grid.major.x = element_blank(),
+          legend.position = "top",
+          panel.grid.minor.y = element_blank())
+```
+
+```{r, fig.height=4.5, fig.width=6.69}
+wrap_plots(cputime_plot + 
+               theme(axis.text.x = element_blank(), legend.margin = margin(0, 0, 0, 0),
+                     legend.box.margin = margin(0, 0, 0, 0),
+                     plot.margin = margin(0, 0, 0, 0)), 
+           plot_base_method_color_text +
+               facet_grid(cols = NULL, rows = vars(variable), 
+                          scales = "free_y", drop = T) +
+               scale_x_discrete(limits = method_order) +
+               theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                     axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+                     strip.text = element_blank()), 
+           ncol = 1)
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```

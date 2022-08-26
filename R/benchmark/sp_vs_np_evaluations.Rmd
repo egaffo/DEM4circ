@@ -1,0 +1,962 @@
+---
+title: "Compare evaluation results of semi-parametric and non-parametric simulations"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+outdir <- "sp_vs_np_evaluations"
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = F, warning = F,
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"))
+
+library(data.table)
+library(patchwork)
+# install.packages("ggdendro")
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(viridis)
+library(DT)
+library(ggdendro)
+
+## can be used to compute F1 and other F-scores, such as F0.5 (beta = 0.5)
+f.beta <- function(P, R, beta = 1) {
+    (1 + beta^2) * ( (P * R) / ( (beta^2 * P) + R) )
+}
+
+#' A function to mimic the ggplot default palette
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+```
+
+```{r}
+method_types <- 
+  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
+                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
+                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
+                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
+                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
+                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
+                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
+                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
+                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
+                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
+                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
+                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
+                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
+             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Single cell / metagenome"),
+             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
+                            "DESeq2", "DESeq2", "glmGamPoi", 
+                            "DESeq2", "DESeq2", "DESeq2", 
+                            "DESeq2", "DEsingle", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "limma", "lncDIFF", "MAST", 
+                            "metagenomeSeq", "monocle", "NBID", 
+                            "NBID", "NOISeqBIO", "PoissonSeq", 
+                            "ROTS", "SAMseq", "Seurat", 
+                            "Seurat", "Voom", "Voom", 
+                            "Voom", "Voom", "Voom", 
+                            "Voom", "Wilcoxon"))
+```
+
+```{r}
+method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+                          nm = sort(method_types$Method))
+
+method_types_colors.dt <- 
+  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+        method_types, 
+        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+
+method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+                                    method_types_colors.dt$BaseMethod))
+```
+
+```{r, fig.width=7, fig.height=2.5}
+plot_dt <- 
+  melt(copy(method_types)[, c("Base", "Parameters", 
+                              "Test") := tstrsplit(Method, "_")][, .(Method,
+                                                                     Type,
+                                                                     `Base tool` = BaseMethod,
+                                                                     Parameters,
+                                                                     Test)], 
+                id.vars = c("Method", "Type"))
+
+## Fix names
+plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
+plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
+plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "TWSP"]
+plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
+plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
+plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "DT"]
+plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
+
+plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
+plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
+plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
+plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
+
+plot_dt[variable == "Parameters", value := toupper(value)]
+
+plot_dt$variable <- factor(plot_dt$variable, 
+                           levels = sort((levels(plot_dt$variable))), 
+                           ordered = T)
+
+plot_base_method_color_text <-
+  ggplot(plot_dt[variable != "Test"], 
+         aes(y = Method, 
+             x = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            angle = 0, 
+            vjust = 0.3,  
+            size = 3) +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  facet_grid(cols = vars(variable),
+             scales = "free_x", 
+             space = "free",
+             drop = T) +
+  theme_bw() +
+  theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+        axis.text.y = element_blank(), 
+        axis.text.x = element_blank(), 
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = NA, color = NA), 
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text
+```
+
+```{r}
+method_labels_table <- 
+  dcast(plot_dt[, .(Method, variable, value)], 
+      Method ~ variable)[, .(Method, 
+                             MethodLabel = paste(`Base tool`, 
+                                                 Parameters, #Test, 
+                                                 sep = " "))]
+```
+
+# NP {.tabset}
+
+```{r}
+sbAssay_all_dt <- fread(file.path("PC_overall_evaluations/sbAssay_dt.csv.gz"))
+
+
+colnames(sbAssay_all_dt) <- 
+  sub("R\\.3", "R_0.10", 
+      sub("R\\.2", "R_0.05", 
+          sub("R\\.1", "R_0.01", 
+              colnames(sbAssay_all_dt))))
+
+colnames(sbAssay_all_dt) <- 
+  sub("rejections\\.3", "rejections_0.10", 
+      sub("rejections\\.2", "rejections_0.05", 
+          sub("rejections\\.1", "rejections_0.01", 
+              colnames(sbAssay_all_dt))))
+
+colnames(sbAssay_all_dt) <- 
+  sub("([015])\\.1$", "\\1_padj", 
+      colnames(sbAssay_all_dt))
+
+sbAssay_all_dt[, `:=`(F1_0.01 = f.beta(1-FDR_0.01_padj, TPR_0.01_padj),
+                  F1_0.05 = f.beta(1-FDR_0.05_padj, TPR_0.05_padj),
+                  F1_0.10 = f.beta(1-FDR_0.10_padj, TPR_0.10_padj))]
+
+value_cols <- 
+  c(grep("rejections", colnames(sbAssay_all_dt), value = T),
+    grep("TPR", colnames(sbAssay_all_dt), value = T),
+    grep("TNR", colnames(sbAssay_all_dt), value = T),
+    grep("FDR", colnames(sbAssay_all_dt), value = T),
+    grep("F1", colnames(sbAssay_all_dt), value = T))
+```
+
+## FPR
+
+```{r}
+## FPR
+sbAssay_dt <- sbAssay_all_dt[MZP == "bulk" & DsType == "mock"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+```
+
+```{r}
+idvars <- c("Source_ds", "Dataset", "Method", "SetSize")
+np_mock_method_ranks <- 
+    melt(sbAssay_dt[, c(idvars, value_cols), with = F], 
+         id.vars = idvars)
+
+np_mock_method_ranks[, Alpha := as.numeric(gsub("rejections|TPR|FDR|TNR|_|padj|F1", "", variable))]
+
+## make the FPRs closer to the nominal value ranked on top when sorting by ascending order
+## Mind that FPR = 1 - TNR.
+np_mock_method_ranks[grepl("^TNR", variable), 
+             value := abs((1 - value) - Alpha)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                      variable))]
+
+np_mock_method_ranks <- 
+    np_mock_method_ranks[order(value, decreasing = F, na.last = T), 
+                 Rank := seq_along(value), 
+                 by = .(Source_ds, SetSize, Dataset, variable)][]
+np_mock_method_ranks[is.na(value), Rank := max(Rank)]
+
+## compute the rank of each method according to FDR, TPR and AUPRC
+## in each simulation and then calculate the average rank
+np_fpr_mean_rank <- np_mock_method_ranks[variable == "FPR_0.05", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+```
+
+## TPR, FDR, F1
+
+```{r}
+## TPR, FDR, F1, AUPRC
+
+sbAssay_dt <- sbAssay_all_dt[DsType == "de" & MZP == "bulk"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+
+## mean by set size
+# msbAssay_dt <- 
+#   melt(sbAssay_dt[, lapply(.SD, mean, na.rm = T), 
+#            .SDcols = value_cols,
+#            by = .(SetSize, Method)], 
+#        id.vars = c("SetSize", 
+#                    "Method"))[, Beta := sub(".*(0\\.[015]{2}).*", "\\1", variable)]
+```
+
+
+```{r}
+idvars <- c("Source_ds", "Dataset", "Method", "SetSize")
+np_method_ranks <- 
+    melt(sbAssay_dt[, c(idvars, value_cols), with = F], 
+         id.vars = idvars)
+
+np_method_ranks[, Alpha := as.numeric(gsub("rejections|TPR|FDR|_|padj|F1", "", variable))]
+
+## make FDR closer to the nominal value to rank on top when sorting by ascending order
+np_method_ranks[grepl("^FDR", variable), value := abs(value - Alpha)]
+## make higher TPR to rank on top when sorting by ascending order
+np_method_ranks[grepl("^TPR", variable), value := 1 - value]
+
+np_method_ranks[grepl("^F1", variable), value := 1 - value]
+
+np_method_ranks <- 
+    np_method_ranks[order(value, decreasing = F, na.last = T), 
+                 Rank := seq_along(value), 
+                 by = .(Source_ds, SetSize, Dataset, variable)][]
+np_method_ranks[is.na(value), Rank := max(Rank)]
+
+## compute the rank of each method according to FDR, TPR and AUPRC
+## in each simulation and then calculate the average rank
+np_fdr_mean_rank <- np_method_ranks[variable == "FDR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+np_tpr_mean_rank <- np_method_ranks[variable == "TPR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+
+np_f1_mean_rank <- np_method_ranks[variable == "F1_0.05", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+```
+
+## AUC
+
+```{r}
+##get AUC
+np_auc <- fread("PC_overall_evaluations/overall_auc.csv.gz")
+np_auc[, DsId := formatC(DsId, width = 2, flag = "0")]
+
+np_auprc_rank <- 
+    np_auc[order(AUCPR, decreasing = T, na.last = T), 
+        .(Method, AUCPR,
+          Rank = seq_along(AUCPR)), 
+        by = .(Source_ds, SetSize, DsId)]
+np_auprc_rank[is.na(AUCPR), Rank := max(Rank)]
+
+np_auprc_mean_rank <- 
+    np_auprc_rank[, .(mean_rank = mean(Rank),
+                      sd_rank = sd(Rank)), 
+               by = .(SetSize, Method)]
+```
+
+# SP {.tabset}
+
+```{r}
+sbAssay_all_dt <- fread(file.path("overall_evaluations/sbAssay_dt.csv.gz"))
+
+colnames(sbAssay_all_dt) <- 
+  sub("R\\.3", "R_0.10", 
+      sub("R\\.2", "R_0.05", 
+          sub("R\\.1", "R_0.01", 
+              colnames(sbAssay_all_dt))))
+
+colnames(sbAssay_all_dt) <- 
+  sub("rejections\\.3", "rejections_0.10", 
+      sub("rejections\\.2", "rejections_0.05", 
+          sub("rejections\\.1", "rejections_0.01", 
+              colnames(sbAssay_all_dt))))
+
+colnames(sbAssay_all_dt) <- 
+  sub("([015])\\.1$", "\\1_padj", 
+      colnames(sbAssay_all_dt))
+
+sbAssay_all_dt[, `:=`(F1_0.01 = f.beta(1-FDR_0.01_padj, TPR_0.01_padj),
+                  F1_0.05 = f.beta(1-FDR_0.05_padj, TPR_0.05_padj),
+                  F1_0.10 = f.beta(1-FDR_0.10_padj, TPR_0.10_padj))]
+
+value_cols <- 
+  c(grep("rejections", colnames(sbAssay_all_dt), value = T),
+    grep("TPR", colnames(sbAssay_all_dt), value = T),
+    grep("TNR", colnames(sbAssay_all_dt), value = T),
+    grep("FDR", colnames(sbAssay_all_dt), value = T),
+    grep("F1", colnames(sbAssay_all_dt), value = T))
+```
+
+## FPR
+
+```{r}
+## FPR
+sbAssay_dt <- sbAssay_all_dt[MZP == "bulk" & DsType == "mock"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+```
+
+```{r}
+idvars <- c("Source_ds", "Dataset", "Method", "SetSize")
+mock_method_ranks <- 
+    melt(sbAssay_dt[, c(idvars, value_cols), with = F], 
+         id.vars = idvars)
+
+mock_method_ranks[, Alpha := as.numeric(gsub("rejections|TPR|FDR|TNR|_|padj|F1", "", variable))]
+
+## make the FPRs closer to the nominal value ranked on top when sorting by ascending order
+## Mind that FPR = 1 - TNR.
+mock_method_ranks[grepl("^TNR", variable), 
+             value := abs((1 - value) - Alpha)][, `:=`(variable = sub("TNR", "FPR", 
+                                                                      variable))]
+
+mock_method_ranks <- 
+    mock_method_ranks[order(value, decreasing = F, na.last = T), 
+                 Rank := seq_along(value), 
+                 by = .(Source_ds, SetSize, Dataset, variable)][]
+mock_method_ranks[is.na(value), Rank := max(Rank)]
+
+## compute the rank of each method according to FDR, TPR and AUPRC
+## in each simulation and then calculate the average rank
+fpr_mean_rank <- mock_method_ranks[variable == "FPR_0.05", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+
+fpr_ds_mean_rank <- mock_method_ranks[variable == "FPR_0.05", 
+                                      .(mean_rank = mean(Rank),
+                                        sd_rank = sd(Rank)), 
+                                      by = .(Source_ds, SetSize, Method)]
+```
+
+## TPR, FDR, F1
+
+```{r}
+## TPR, FDR, F1, AUPRC
+
+sbAssay_dt <- sbAssay_all_dt[DsType == "de" & MZP == "bulk"]
+sbAssay_dt$DsType <- NULL
+sbAssay_dt$MZP <- NULL
+```
+
+
+```{r}
+idvars <- c("Source_ds", "Dataset", "Method", "SetSize")
+method_ranks <- 
+    melt(sbAssay_dt[, c(idvars, value_cols), with = F], 
+         id.vars = idvars)
+
+method_ranks[, Alpha := as.numeric(gsub("rejections|TPR|FDR|_|padj|F1", "", variable))]
+
+## make FDR closer to the nominal value to rank on top when sorting by ascending order
+method_ranks[grepl("^FDR", variable), value := abs(value - Alpha)]
+## make higher TPR to rank on top when sorting by ascending order
+method_ranks[grepl("^TPR", variable), value := 1 - value]
+
+method_ranks[grepl("^F1", variable), value := 1 - value]
+
+method_ranks <- 
+    method_ranks[order(value, decreasing = F, na.last = T), 
+                 Rank := seq_along(value), 
+                 by = .(Source_ds, SetSize, Dataset, variable)][]
+method_ranks[is.na(value), Rank := max(Rank)]
+
+## compute the rank of each method according to FDR, TPR and AUPRC
+## in each simulation and then calculate the average rank
+fdr_mean_rank <- method_ranks[variable == "FDR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+tpr_mean_rank <- method_ranks[variable == "TPR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+
+f1_mean_rank <- method_ranks[variable == "F1_0.05", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method)]
+## keep source set
+fdr_ds_mean_rank <- method_ranks[variable == "FDR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method, Source_ds)]
+
+tpr_ds_mean_rank <- method_ranks[variable == "TPR_0.05_padj", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method, Source_ds)]
+
+f1_ds_mean_rank <- method_ranks[variable == "F1_0.05", 
+                              .(mean_rank = mean(Rank),
+                                sd_rank = sd(Rank)), 
+                              by = .(SetSize, Method, Source_ds)]
+```
+
+## AUC 
+
+```{r}
+##get AUC
+auc <- fread("overall_evaluations/overall_auc.csv.gz")
+auc[, DsId := formatC(DsId, width = 2, flag = "0")]
+
+auprc_rank <- 
+    auc[order(AUCPR, decreasing = T, na.last = T), 
+        .(Method, AUCPR,
+          Rank = seq_along(AUCPR)), 
+        by = .(Source_ds, SetSize, DsId)]
+auprc_rank[is.na(AUCPR), Rank := max(Rank)]
+
+auprc_mean_rank <- 
+    auprc_rank[, .(mean_rank = mean(Rank),
+                   sd_rank = sd(Rank)), 
+               by = .(SetSize, Method)]
+
+auprc_ds_mean_rank <- 
+    auprc_rank[, .(mean_rank = mean(Rank),
+                   sd_rank = sd(Rank)), 
+               by = .(SetSize, Method, Source_ds)]
+```
+
+# Combine
+
+```{r}
+mean_ranks <- rbindlist(list(SP_FPR = fpr_mean_rank, 
+                             SP_TPR = tpr_mean_rank, 
+                             SP_FDR = fdr_mean_rank, 
+                             SP_AUC = auprc_mean_rank, 
+                             SP_F1 = f1_mean_rank, 
+                             NP_FPR = np_fpr_mean_rank, 
+                             NP_TPR = np_tpr_mean_rank, 
+                             NP_FDR = np_fdr_mean_rank, 
+                             NP_AUC = np_auprc_mean_rank,
+                             NP_F1 = np_f1_mean_rank), 
+                        idcol = "Measure")
+mean_ranks[, c("Sim", "Meas"):=tstrsplit(Measure, "_")]
+```
+
+```{r}
+ds_mean_ranks <- rbindlist(list(SP_FPR = fpr_ds_mean_rank, 
+                                SP_TPR = tpr_ds_mean_rank, 
+                                SP_FDR = fdr_ds_mean_rank, 
+                                SP_AUC = auprc_ds_mean_rank, 
+                                SP_F1 = f1_ds_mean_rank, 
+                                NP_FPR = np_fpr_mean_rank, 
+                                NP_TPR = np_tpr_mean_rank, 
+                                NP_FDR = np_fdr_mean_rank, 
+                                NP_AUC = np_auprc_mean_rank,
+                                NP_F1 = np_f1_mean_rank), 
+                           idcol = "Measure", fill = T)
+ds_mean_ranks[, c("Sim", "Meas"):=tstrsplit(Measure, "_")]
+ds_mean_ranks[Sim == "NP", Source_ds := "PC"]
+```
+
+
+```{r}
+npsp_fpr_rank <- rbindlist(list(NP = np_mock_method_ranks[variable == "FPR_0.05"], 
+                                SP = mock_method_ranks[variable == "FPR_0.05"]), 
+                           idcol = "Sim")
+npsp_fdr_rank <- rbindlist(list(NP = np_method_ranks[variable == "FDR_0.05_padj"],
+                                SP = method_ranks[variable == "FDR_0.05_padj"]), 
+                           idcol = "Sim")
+npsp_tpr_rank <- rbindlist(list(NP = np_method_ranks[variable == "TPR_0.05_padj"], 
+                                SP = method_ranks[variable == "TPR_0.05_padj"]), 
+                           idcol = "Sim")
+npsp_auprc_rank <- rbindlist(list(NP = np_auprc_rank, 
+                                  SP = auprc_rank), 
+                             idcol = "Sim")
+npsp_f1_rank <- rbindlist(list(NP = np_method_ranks[variable == "F1_0.05"], 
+                               SP = method_ranks[variable == "F1_0.05"]), 
+                          idcol = "Sim")
+
+all_meas_ranks <- rbindlist(list(FPR = npsp_fpr_rank[, .(Sim, Source_ds, SetSize, Method, Rank,
+                                                         DsId = gsub(".*_([0-9]{2})$", "\\1", Dataset))],
+                                 FDR = npsp_fdr_rank[, .(Sim, Source_ds, SetSize, Method, Rank, 
+                                                         DsId = gsub(".*_([0-9]{2})$", "\\1", Dataset))],
+                                 TPR = npsp_tpr_rank[, .(Sim, Source_ds, SetSize, Method, Rank,
+                                                         DsId = gsub(".*_([0-9]{2})$", "\\1", Dataset))],
+                                 AUC = npsp_auprc_rank[, .(Sim, Source_ds, SetSize, Method, Rank, DsId)],
+                                 F1 = npsp_f1_rank[, .(Sim, Source_ds, SetSize, Method, Rank,
+                                                         DsId = gsub(".*_([0-9]{2})$", "\\1", Dataset))]),
+                            idcol = "Measure")
+
+# a <- dcast(data = all_meas_ranks, 
+#            formula = Measure + Source_ds + SetSize + Method + DsId ~ Sim, 
+#            value.var = "Rank")[, .(T.test.pval_NPSP = t.test(NP, SP)$p.value), 
+#                                by = .(Measure, SetSize, Method)]
+```
+
+## Correlations
+
+```{r}
+meth.mean.rank.cors <- 
+    dcast(all_meas_ranks[, .(Mean_rank = mean(Rank)), 
+                         by = .(Measure, Sim, SetSize, Method)],
+          Measure + SetSize + Method ~ Sim, 
+          value.var = "Mean_rank")[, cor.test(SP, NP, method = "spearman", exact = F)[-2],
+                                   by = .(Measure, SetSize)]
+```
+
+```{r}
+datatable(meth.mean.rank.cors[, .(Measure, SetSize, Pvalue = p.value, Rho = estimate)],
+          extensions = 'Buttons', 
+          options = list(dom = 'Blfrtip',
+                         buttons = c('copy', 'csv')),
+          filter = "top", 
+          caption = paste("Separman correlation between methods' mean ranks",
+                          "in semiparametric and nonparametric simulations"))
+```
+
+## Mean rank plots {.tabset}
+
+### Mean N03
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- mean_ranks[SetSize == "N03"]
+
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+# plot_dt[, Method := gsub("_", " ", Method), by = Method]
+
+ggplot(plot_dt, aes(x = Method, y = mean_rank, color = Sim)) +
+  geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_line(aes(group = Sim)) +
+  geom_pointrange(aes(ymin = mean_rank - sd_rank, ymax = mean_rank + sd_rank), 
+                  position = position_dodge2(width = .3)) +
+  facet_grid(rows = vars(Meas), 
+             labeller = label_wrap_gen(width = 7)) +
+  scale_color_calc("Simulation type", labels = c("Non-parametric", "Semi-parametric")) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL) +
+  scale_x_discrete(labels = data.frame(method_labels_table, 
+                                       row.names = "Method")[sort(unique(plot_dt$Method)), 
+                                                             "MethodLabel"]) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        text = element_text(size = 10),
+        legend.position = "top", 
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(angle = 90, hjust = 1, 
+                                   vjust = .5, 
+                                   colour = method_colors))
+```
+
+### Mean N05
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- mean_ranks[SetSize == "N05"]
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+
+ggplot(plot_dt, aes(x = Method, y = mean_rank, color = Sim)) +
+  geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_line(aes(group = Sim)) +
+  geom_pointrange(aes(ymin = mean_rank - sd_rank, ymax = mean_rank + sd_rank), 
+                  position = position_dodge2(width = .3)) +
+  facet_grid(rows = vars(Meas), 
+             labeller = label_wrap_gen(width = 7)) +
+  scale_color_calc("Simulation type", labels = c("Non-parametric", "Semi-parametric")) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL) +
+  scale_x_discrete(labels = data.frame(method_labels_table, 
+                                       row.names = "Method")[sort(unique(plot_dt$Method)), 
+                                                             "MethodLabel"]) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        text = element_text(size = 10),
+        legend.position = "top", 
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(angle = 90, hjust = 1, 
+                                   vjust = .5, 
+                                   colour = method_colors))
+```
+
+### Mean N10
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- mean_ranks[SetSize == "N10"]
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+
+ggplot(plot_dt, aes(x = Method, y = mean_rank, color = Sim)) +
+  geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_line(aes(group = Sim)) +
+  geom_pointrange(aes(ymin = mean_rank - sd_rank, ymax = mean_rank + sd_rank), 
+                  position = position_dodge2(width = .3)) +
+  facet_grid(rows = vars(Meas), 
+             labeller = label_wrap_gen(width = 7)) +
+  scale_color_calc("Simulation type", labels = c("Non-parametric", "Semi-parametric")) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL) +
+  scale_x_discrete(labels = data.frame(method_labels_table, 
+                                       row.names = "Method")[sort(unique(plot_dt$Method)), 
+                                                             "MethodLabel"]) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        text = element_text(size = 10),
+        legend.position = "top", 
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(angle = 90, hjust = 1,
+                                   vjust = .5, 
+                                   colour = method_colors))
+```
+
+### All set sizes together
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- all_meas_ranks[, .(mean_rank = mean(Rank),
+                   sd_rank = sd(Rank)), 
+               by = .(Measure, Sim, Method)]
+plot_dt <- merge(method_labels_table, plot_dt, by = "Method")
+
+ggplot(plot_dt, aes(x = Method, y = mean_rank, color = Sim)) +
+  geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+  geom_line(aes(group = Sim)) +
+  geom_pointrange(aes(ymin = mean_rank - sd_rank, ymax = mean_rank + sd_rank), 
+                  position = position_dodge2(width = .3)) +
+  facet_grid(rows = vars(Measure), 
+             labeller = label_wrap_gen(width = 7)) +
+  scale_color_calc("Simulation type", labels = c("Non-parametric", "Semi-parametric")) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL) +
+  scale_x_discrete(labels = data.frame(method_labels_table, 
+                                       row.names = "Method")[sort(unique(plot_dt$Method)), 
+                                                             "MethodLabel"]) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        text = element_text(size = 10),
+        legend.position = "top", 
+        strip.text = element_text(size = 6),
+        axis.text.x = element_text(angle = 90, hjust = 1,
+                                   vjust = .5, 
+                                   colour = method_colors))
+```
+
+## Overall ranking {.tabset}
+
+### Clust ord dodge
+
+```{r, fig.width=6.69, fig.height=6.69}
+rank_mat_dt <- 
+    dcast(data = all_meas_ranks[, .(MeanRank = mean(Rank)), 
+                                by = .(Source_ds, SetSize, Method, Measure)], 
+          formula = Method ~ Measure + SetSize + Source_ds, 
+          value.var = "MeanRank")
+
+rank_mat <- as.matrix(data.frame(rank_mat_dt,
+                       row.names = "Method", 
+                       check.names = F))
+
+rank_dist <- dist(x = rank_mat, method = "canberra")
+# rank_clust <- hclust(rank_dist, method = "complete")
+rank_clust <- seriation::seriate(x = rank_dist, method = "GW_complete")
+# plot(rank_clust)
+method_order <- attr(rank_dist, "Labels")[seriation::get_order(rank_clust)]
+
+## clutering according to N05
+rank_dist_n05 <- dist(x = rank_mat[, grep("N05", colnames(rank_mat), value = T)], 
+                      method = "canberra")
+rank_clust_n05 <- seriation::seriate(x = rank_dist_n05, method = "GW_complete")
+method_order_n05 <- attr(rank_dist_n05, "Labels")[seriation::get_order(rank_clust_n05)]
+```
+
+```{r}
+rank_dendro_ddata <- 
+  dendro_data(as.dendrogram(rank_clust[[1]]),
+              type = "rectangle")
+
+rank_dendro <- 
+    ggplot(segment(rank_dendro_ddata), aes(x = x, y = y)) +
+    geom_segment(aes(xend = xend, yend = yend)) +
+    scale_x_continuous(name = NULL, 
+                       # trans = "reverse",
+                       breaks = label(rank_dendro_ddata)$x, 
+                       labels = label(rank_dendro_ddata)$label, 
+                       expand = c(0, 0), 
+                       position = "top")
+
+## N05
+rank_dendro_ddata_n05 <- 
+  dendro_data(as.dendrogram(rank_clust_n05[[1]]),
+              type = "rectangle")
+
+rank_dendro_n05 <- 
+    ggplot(segment(rank_dendro_ddata_n05), aes(x = x, y = y)) +
+    geom_segment(aes(xend = xend, yend = yend)) +
+    scale_x_continuous(name = NULL, 
+                       # trans = "reverse",
+                       breaks = label(rank_dendro_ddata_n05)$x, 
+                       labels = label(rank_dendro_ddata_n05)$label, 
+                       expand = c(0, 0), 
+                       position = "top")
+```
+
+```{r, fig.width=8.85, fig.height=6.69}
+plot_dt <- all_meas_ranks[, .(mean_rank = mean(Rank),
+                              sd_rank = sd(Rank)), 
+                          by = .(Measure, SetSize, Method)]
+plot_dt$Measure <- factor(plot_dt$Measure, 
+                          levels = c("F1", "FDR", "TPR", "AUC", "FPR"), 
+                          labels = c(expression(F[1]), "FDR", "TPR", "AUPRC", "FPR"),
+                          ordered = T)
+
+rank_dot_plot <- 
+    ggplot(plot_dt, 
+           aes(x = Method, y = mean_rank, shape = SetSize)) +
+    geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+    geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+    geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+    # geom_line(aes(group = Sim)) +
+    geom_pointrange(aes(ymin = mean_rank - sd_rank, 
+                        ymax = mean_rank + sd_rank, 
+                        color = Method, fill = Method), 
+                    show.legend = F,
+                    size = .15,
+                    position = position_dodge2(width = .5)) +
+    geom_point(size = 1.5, #shape = 21, 
+               position = position_dodge2(width = .5)) +
+    scale_shape_manual(name = "Set size", values = 21:23) +
+    facet_grid(cols = vars(Measure), 
+               # labeller = label_wrap_gen(width = 7)) +
+               labeller = labeller(Measure = label_parsed)) +
+    scale_color_manual(values = method_colors, guide = "none") +
+    scale_fill_manual(values = method_colors, guide = "none") +
+    # coord_cartesian(ylim = c(1, length(unique(plot_dt$Method)))) +
+    coord_flip(ylim = c(1, max(plot_dt$mean_rank))) +
+    labs(x = NULL, y = "Mean rank") +
+    scale_x_discrete(limits = method_order) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          text = element_text(size = 8),
+          legend.position = "top", 
+          strip.text = element_text(size = 6),
+          axis.text.y = element_text(angle = 0, 
+                                     hjust = 1, 
+                                     color = method_colors[method_order]))
+```
+
+
+```{r, fig.height=8.85, fig.width=6.69}
+library(patchwork)
+
+wrap_plots(rank_dendro +
+               facet_grid(cols = vars("A")) +
+               scale_y_reverse() + #, expand = c(0, 0.00)
+               coord_flip(xlim = c(.5, 38.5)) +
+               theme_dendro() +
+               theme(axis.text.x = element_blank(),
+                     # axis.text.y = element_text(color = method_colors[label(rank_dendro_ddata)$label],
+                     #                          angle = 0,
+                     #                          hjust = 1),
+                   axis.text.y = element_blank(),
+                   plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   text = element_text(size = 8),
+                   strip.text = element_blank(),
+                   panel.grid.major.x = element_blank(),
+                   panel.grid.minor.x = element_blank(),
+                   panel.grid.major.y = element_blank(),
+                   panel.grid.minor.y = element_blank()),
+           plot_base_method_color_text +
+               scale_y_discrete(limits = method_order) +
+               theme(plot.margin = unit(c(0, 0, 0, 0), "lines")),
+           rank_dot_plot +
+               theme(axis.text.y = element_blank(),
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           nrow = 1, widths = c(.25, .6, 1),
+           guides = "collect") & 
+    guides(shape = guide_legend(override.aes = list(size = 3))) &
+    theme(legend.direction = "horizontal", 
+          legend.position = "top", 
+          legend.margin = margin(0,0,0,0), 
+          legend.box.margin = margin(0,0,0,0))
+```
+
+### Stacked bars
+
+```{r, fig.height=6.5, fig.width=6.69}
+### stacked bars
+sumranks <- plot_dt[Measure %in% c("FDR", "TPR", "AUPRC", "FPR"), 
+                    .(SumRank = sum(mean_rank)), 
+                    by = .(Method, SetSize)]
+sumrank_order <- 
+    sumranks[order(-SumRank)][SetSize == "N05", Method]
+
+method_labels <- data.frame(method_labels_table, 
+                            row.names = "Method")[sumrank_order, "MethodLabel"]
+
+rank_barstack_plot <- 
+    ggplot(plot_dt[Measure %in% c("FDR", "TPR", "AUPRC", "FPR")], 
+           aes(x = Method, y = mean_rank, fill = Measure)) +
+    geom_bar(stat = "identity", position = position_stack(reverse = T)) +
+    facet_grid(cols = vars(SetSize)) +
+    scale_fill_calc() +
+    # coord_cartesian(ylim = c(1, length(unique(plot_dt$Method)))) +
+    coord_flip() + #expand = T, ylim = c(1, max(sumranks$SumRank))
+    labs(x = NULL, y = "Sum of mean ranks") +
+    scale_x_discrete(limits = sumrank_order, labels = method_labels) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major.y = element_blank(),
+          text = element_text(size = 10),
+          legend.position = "top", 
+          strip.text = element_text(size = 10),
+          axis.text.y = element_text(angle = 0, 
+                                     hjust = 1, 
+                                     color = method_colors[sumrank_order]))
+rank_barstack_plot
+```
+
+### Clust ord dodge N05
+
+```{r, fig.width=8.85, fig.height=6.69}
+rank_dot_plot_n05 <- 
+    ggplot(plot_dt[SetSize == "N05"], 
+           aes(x = Method, y = mean_rank, shape = SetSize)) +
+    geom_abline(intercept = 10.25, slope = 0, linetype = "dashed", color = "grey55") + 
+    geom_abline(intercept = 19.5, slope = 0, linetype = "dashed", color = "grey55") + 
+    geom_abline(intercept = 28.75, slope = 0, linetype = "dashed", color = "grey55") + 
+    # geom_line(aes(group = Sim)) +
+    geom_pointrange(aes(ymin = mean_rank - sd_rank, 
+                        ymax = mean_rank + sd_rank, 
+                        color = Method, 
+                        fill = Method), 
+                    size = .2,
+                    position = position_dodge2(width = .5)) +
+    geom_point(size = 2, #shape = 21, 
+               position = position_dodge2(width = .7)) +
+    scale_shape_manual(name = "Set size", values = 21:23, guide = "none") +
+    facet_grid(cols = vars(Measure), 
+               # labeller = label_wrap_gen(width = 7)) +
+               labeller = labeller(Measure = label_parsed)) +
+    scale_color_manual(values = method_colors, guide = "none") +
+    scale_fill_manual(values = method_colors, guide = "none") +
+    # coord_cartesian(ylim = c(1, length(unique(plot_dt$Method)))) +
+    coord_flip(ylim = c(1, max(plot_dt$mean_rank))) +
+    labs(x = NULL, y = "Mean rank") +
+    scale_x_discrete(limits = method_order_n05) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank(),
+          plot.margin = unit(c(0, 0, 0, 0), "lines"),
+          text = element_text(size = 8),
+          legend.position = "top", 
+          strip.text = element_text(size = 10),
+          axis.text.y = element_text(angle = 0, 
+                                     hjust = 1, 
+                                     color = method_colors[method_order_n05]))
+```
+
+
+```{r, fig.height=6.5, fig.width=6.69}
+wrap_plots(rank_dendro_n05 +
+               facet_grid(cols = vars("A")) +
+               scale_y_reverse() + #, expand = c(0, 0.00)
+               coord_flip(xlim = c(.5, 38.5)) +
+               theme_dendro() +
+               theme(axis.text.x = element_blank(),
+                     # axis.text.y = element_text(color = method_colors[label(rank_dendro_ddata_n05)$label],
+                     #                            angle = 0,
+                     #                            hjust = 1),
+                   axis.text.y = element_blank(),
+                   
+                   # text = element_text(size = 10),
+                   strip.text = element_blank(),
+                   plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   panel.grid.major.x = element_blank(),
+                   panel.grid.minor.x = element_blank(),
+                   panel.grid.major.y = element_blank(),
+                   panel.grid.minor.y = element_blank()),
+           plot_base_method_color_text +
+               scale_y_discrete(limits = method_order_n05) +
+               theme(plot.margin = unit(c(0, 0, 0, 0), "lines")),
+           rank_dot_plot_n05 +
+               theme(axis.text.y = element_blank(),
+                     plot.margin = unit(c(0, 0, 0, 0), "lines")), 
+           nrow = 1, 
+           widths = c(.25, .6, 1),
+           guides = "collect") & 
+    theme(legend.direction = "horizontal", 
+          text = element_text(size = 10),
+          legend.position = "top")
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

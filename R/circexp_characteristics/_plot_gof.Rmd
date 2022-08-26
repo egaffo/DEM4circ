@@ -1,0 +1,280 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+## Required variables
+## detection_method
+## dataset_name
+## filters_order
+## results_dir
+library(viridis)
+```
+
+```{r, include=FALSE}
+source("../utils/fun_gof.R")
+
+fit_NB_ZINB <- function(mat.dt, coldata = NULL) {
+  counts <- as.matrix(data.frame(mat.dt, 
+                                 row.names = "circ_id", 
+                                 check.names = F))
+  
+  if(!is.null(coldata)) {
+    coldata <- coldata[colnames(counts), ]
+  }
+  
+  models_fits.dt <- 
+    rbindlist(fitModels(counts = counts, 
+                        coldata = coldata), 
+              idcol = "Model")
+  
+  models_fits.dt
+}
+```
+
+```{r, include=FALSE}
+matrices_to_analyse <- 
+  matrix_list[grepl(detection_method, names(matrix_list)) & 
+                grepl(dataset_name, names(matrix_list))]
+
+# coldatas <- rep(meta_list[grepl(dataset_name, names(meta_list))], 
+#                 each = length(filters_order))
+
+mat_models_fits.l <- 
+  mapply(fit_NB_ZINB, 
+         mat.dt = matrices_to_analyse, 
+         # coldata = coldatas, 
+         SIMPLIFY = F)
+
+mat_models_fits.dt <- rbindlist(mat_models_fits.l, idcol = "Method")
+```
+
+### RMSE 
+
+```{r, fig.height=5}
+plot.dt <- copy(mat_models_fits.dt)
+
+plot.dt$Method <- gsub("_", " ", plot.dt$Method)
+plot.dt$Method <- factor(plot.dt$Method, 
+                         levels = paste(dataset_name, 
+                                        filters_order, 
+                                        detection_method), 
+                         ordered = T)
+```
+
+```{r, fig.height=5, message=FALSE}
+# library(RColorBrewer)
+
+MDPlot(data = plot.dt, 
+       difference = "MD") +
+  # scale_color_brewer(type = "qual", guide = "none") +
+  scale_color_viridis("# circRNAs") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = .5), 
+        plot.subtitle = element_text(hjust = .5),
+        legend.position = "right",
+        axis.text.x = element_text(angle = 90, 
+                                   hjust = 1, 
+                                   vjust = .5))
+```
+
+```{r, fig.height=5, message=FALSE}
+MDPlot(data = plot.dt, 
+       difference = "ZPD") +
+  # scale_color_brewer(type = "qual", guide = "none") +
+  scale_color_viridis("# circRNAs") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = .5), 
+        plot.subtitle = element_text(hjust = .5),
+        legend.position = "right",
+        axis.text.x = element_text(angle = 90, 
+                                   hjust = 1, 
+                                   vjust = .5))
+```
+
+### AIC
+
+N.B. lower AIC is better  
+
+```{r}
+aic.dat <- 
+  dcast(data = mat_models_fits.dt, 
+      formula = Method + circ_id ~ Model, 
+      value.var = "aic")[, deltaAIC := NB - ZINB][]
+```
+
+```{r}
+plot.dt <- copy(aic.dat)
+plot.dt[, c("Dataset", "Filter", "Tool") := tstrsplit(Method, "_")]
+
+plot.dt$Filter <- factor(plot.dt$Filter, 
+                         levels = filters_order,
+                         ordered = T)
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+ggplot(data = plot.dt, 
+       mapping = aes(color = Filter, 
+                     fill = Filter,
+                     x = deltaAIC)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_density(alpha = .2) +
+  scale_x_continuous(name = expression(AIC[NB]-AIC[ZINB]), 
+                     limits = c(-10, 10)) +
+  # scale_color_viridis_d() +
+  # scale_fill_viridis_d(alpha = .2) +
+  scale_color_brewer(type = "qual", palette = "Set2") +
+  scale_fill_brewer(type = "qual", palette = "Set2") +
+  # guides(color = guide_legend(nrow = 2)) +
+  # guides(fill = guide_legend(nrow = 2)) +
+  guides(color = guide_legend(ncol = 1)) +
+  guides(fill = guide_legend(ncol = 1)) +
+  theme_classic() +
+  theme(legend.position = c(.2, .7), #"top",
+        legend.direction = "vertical",
+        axis.text.x = element_text(angle = 0, 
+                                   hjust = .5, 
+                                   vjust = .5))
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+ggplot(data = plot.dt, 
+       mapping = aes(color = Filter, 
+                     x = Filter,
+                     y = deltaAIC)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_violin(draw_quantiles = c(.25, .5, .75), 
+              scale = "width") +
+  ylab(expression(AIC[NB]-AIC[ZINB])) +
+  # scale_color_viridis_d(guide = "none") +
+  scale_color_brewer(type = "qual", palette = "Set2", guide = "none") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1))
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+plot.dt.frac <- 
+  plot.dt[, .(Count = .N), 
+        by = .(Filter, 
+               `Best AIC` = ifelse(deltaAIC > 0, 
+                                   "ZINB", 
+                                   "NB"))
+        ][, Tot := sum(Count), 
+          by = Filter][, Frac := Count / Tot][]
+
+ggplot(data = plot.dt.frac, 
+       mapping = aes(x = Filter, y = Frac * 100, 
+                     fill = `Best AIC`)) +
+  geom_col() +
+  geom_text(aes(label = round(Frac * 100, 0)), 
+            position = position_stack(vjust = .5)) +
+  scale_fill_brewer(type = "qual") +
+  guides(fill = guide_legend(reverse = T)) +
+  coord_flip(expand = F, clip = "off") +
+  labs(y = "circRNAs (%)") +
+  theme_classic() +
+  theme(legend.position = "top", axis.text.x = element_text(hjust = 1))
+```
+
+### BIC
+
+```{r}
+bic.dat <- 
+  dcast(data = mat_models_fits.dt, 
+      formula = Method + circ_id ~ Model, 
+      value.var = "bic")[, deltaBIC := NB - ZINB][]
+```
+
+```{r}
+plot.dt <- copy(bic.dat)
+plot.dt[, c("Dataset", "Filter", "Tool") := tstrsplit(Method, "_")]
+
+plot.dt$Filter <- factor(plot.dt$Filter, 
+                         levels = filters_order,
+                         ordered = T)
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+ggplot(data = plot.dt, 
+       mapping = aes(color = Filter, 
+                     fill = Filter,
+                     x = deltaBIC)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_density(alpha = .2) +
+  scale_x_continuous(name = expression(BIC[NB]-BIC[ZINB]), 
+                     limits = c(-10, 10)) +
+  # scale_color_viridis_d() +
+  # scale_fill_viridis_d(alpha = .2) +
+  scale_color_brewer(type = "qual", palette = "Set2") +
+  scale_fill_brewer(type = "qual", palette = "Set2") +
+  # guides(color = guide_legend(nrow = 3)) +
+  # guides(fill = guide_legend(nrow = 3)) +
+  guides(color = guide_legend(ncol = 1)) +
+  guides(fill = guide_legend(ncol = 1)) +
+  theme_classic() +
+  theme(legend.position = c(.2, .7),#"top",
+        legend.direction = "vertical",
+        axis.text.x = element_text(angle = 90, 
+                                   hjust = 1, 
+                                   vjust = .5))
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+ggplot(data = plot.dt, 
+       mapping = aes(color = Filter, 
+                     x = Filter,
+                     y = deltaBIC)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_violin(draw_quantiles = c(.25, .5, .75), 
+              scale = "width") +
+  ylab(expression(BIC[NB]-BIC[ZINB])) +
+  # scale_color_viridis_d(guide = "none") +
+  scale_color_brewer(type = "qual", palette = "Set2", guide = "none") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, 
+                                   hjust = 1))
+```
+
+```{r, fig.width=3.5, fig.height=3.5}
+plot.dt.frac <- 
+  plot.dt[, .(Count = .N), 
+        by = .(Filter, 
+               `Best BIC` = ifelse(deltaBIC > 0, 
+                                   "ZINB", 
+                                   "NB"))
+        ][, Tot := sum(Count), 
+          by = Filter][, Frac := Count / Tot][]
+
+ggplot(data = plot.dt.frac, 
+       mapping = aes(x = Filter, y = Frac * 100, 
+                     fill = `Best BIC`)) +
+  geom_col() +
+  geom_text(aes(label = round(Frac * 100, 0)), 
+            position = position_stack(vjust = .5)) +
+  scale_fill_brewer(type = "qual") +
+  guides(fill = guide_legend(reverse = T)) +
+  coord_flip(expand = F, clip = "off") +
+  labs(y = "circRNAs (%)") +
+  theme_classic() +
+  theme(legend.position = "top", axis.text.x = element_text(hjust = 1))
+```
+
+## Save data
+
+```{r}
+results_file <- file.path(results_dir, 
+                          paste0(detection_method, "_", 
+                                 dataset_name, "_gof.tsv"))
+
+fwrite(x = mat_models_fits.dt, 
+       file = results_file, 
+       quote = F, 
+       sep = "\t", 
+       row.names = F)
+```
+
+Model fit results saved in file <a href="`r results_file`">`r results_file`</a>.  
+

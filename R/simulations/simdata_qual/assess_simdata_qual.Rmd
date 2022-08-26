@@ -1,0 +1,111 @@
+---
+title: "Assess simulated data set quality"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+params:
+  simulated_datasets_qs: "../../../R/simulations/semiparametric/simdata/DM1_trimmed_simulated_datasets.qs"
+  trimmed_source_dataset.qs: "../../../R/simulations/semiparametric/simdata/DM1_trimmed_source_dataset.qs"
+  de_ds_stats_outfile: "../../../R/simulations/semiparametric/simdata_qual/DM1_de_ds_stats.csv"
+  null_ds_stats_outfile: "../../../R/simulations/semiparametric/simdata_qual/DM1_null_ds_stats.csv"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(qs)
+library(data.table)
+library(edgeR)
+library(BiocParallel)
+library(ggplot2)
+```
+
+```{r}
+de_ds_stats_outfile <- params$de_ds_stats_outfile
+
+dir.create(path = dirname(params$de_ds_stats_outfile), recursive = T)
+
+null_ds_stats_outfile <- params$null_ds_stats_outfile
+trimmed_source_dataset.qs <- params$trimmed_source_dataset.qs
+```
+
+# Assess simulated data is similar to real data
+
+```{r}
+nPermutations <- 500 
+```
+
+
+```{r}
+## to read the data
+sim_ds_list <- qread(file = params$simulated_datasets_qs, nthreads = multicoreWorkers())
+```
+
+```{r}
+get_simulated_datasets <- function(x) {
+  x$Datasets$sim.data.list
+}
+```
+
+```{r}
+## separate DE and not-DE simulations
+de_ds_list <- sim_ds_list[!grepl("mock", names(sim_ds_list))]
+names(de_ds_list) <- paste0(names(de_ds_list), "_de")
+not_de_ds_list <- sim_ds_list[grepl("mock", names(sim_ds_list))]
+```
+
+```{r}
+orig_mat_dge <- qread(trimmed_source_dataset.qs, nthreads = multicoreWorkers())
+```
+
+## DE datasets
+
+```{r}
+sim_data_list <- lapply(de_ds_list, get_simulated_datasets)
+```
+
+```{r, child="_simdata_stats.Rmd"}
+
+```
+
+```{r}
+de_ds_stats <- rbindlist(list(Expression = expression_stats, 
+                              FeatureFracZero = featureFracZero_stats, 
+                              ExprVsFracZero = exprVsFracZero_stats, 
+                              LibsizeVsFracZero = libsizeVsFracZero_stats), 
+                         use.names = T, idcol = "Measure", fill = T)
+
+fwrite(de_ds_stats, file = de_ds_stats_outfile, sep = "\t", row.names = F)
+```
+
+## Not DE datasets
+
+```{r}
+sim_data_list <- lapply(not_de_ds_list, get_simulated_datasets)
+```
+
+```{r, child="_simdata_stats.Rmd"}
+
+```
+
+```{r}
+not_de_ds_stats <- rbindlist(list(Expression = expression_stats, 
+                                  FeatureFracZero = featureFracZero_stats, 
+                                  ExprVsFracZero = exprVsFracZero_stats, 
+                                  LibsizeVsFracZero = libsizeVsFracZero_stats), 
+                             use.names = T, idcol = "Measure", fill = T)
+
+fwrite(not_de_ds_stats, file = null_ds_stats_outfile, sep = "\t", row.names = F)
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

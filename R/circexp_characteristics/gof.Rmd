@@ -1,0 +1,269 @@
+---
+title: "GOF"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+params:
+  outdir: "gof"
+  datadir: "../../data"
+  filtdatadir: "bjr_filters"
+---
+
+```{r setup, include=FALSE}
+outdir <- params$outdir
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = F, warning = F,
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"), 
+                      fig.width = 6.8)
+
+library(data.table)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+```
+
+```{r}
+## load datasets
+dataset_names <- c("DM1", "IDC", "IPF", "MS")
+circbjr_files <- dir(params$datadir, full.names = T, pattern = "_CirComPara2_circbjr.csv")
+circbjr_files <- circbjr_files[grepl(pattern = paste0(dataset_names, collapse = "|"), 
+                                     x = circbjr_files)]
+
+unfiltered_matrix_list <- 
+  sapply(circbjr_files, 
+         fread, simplify = F)
+
+
+names(unfiltered_matrix_list) <- sub("_circbjr.csv", "", sub(paste0(params$datadir, "/"), "", names(unfiltered_matrix_list)))
+
+filtered_matrix_list <- 
+  sapply(X = split(fread(file.path(params$filtdatadir, "CirComPara2_filtered_ds.csv")), 
+                   by = c("Ds", "Filter", "CDM"), keep.by = F),
+         FUN = function(x) {
+           dcast(data = x, formula = circ_id ~ sample_id, value.var = "BJR", fill = 0)
+         }, 
+         simplify = F)
+names(filtered_matrix_list) <- gsub("\\.", "_", names(filtered_matrix_list))
+
+matrix_list <- append(unfiltered_matrix_list, filtered_matrix_list)
+
+## load meta info
+meta_list <- 
+  sapply(dir(params$datadir, full.names = T, pattern = "_meta.csv"),
+         function(x)data.frame(fread(x),
+                               row.names = "sample_id")[, "condition", drop = F],
+         simplify = F)
+names(meta_list) <- sub("_meta.csv", "", sub(paste0(params$datadir, "/"), "", names(meta_list)))
+```
+
+```{r}
+filters_order <- c("unfiltered",
+                   "3sampfilt",
+                   "smallestfilt",
+                   "halffilt",
+                   "condfilt")
+```
+
+```{r}
+results_dir <- params$outdir
+dir.create(results_dir, showWarnings = F, recursive = T)
+
+detection_method <- "CirComPara2"
+model_fits_list <- list()
+```
+
+# `r detection_method`
+
+```{r}
+dataset_name <- dataset_names[1]
+```
+
+## `r dataset_name`
+
+```{r, child="_plot_gof.Rmd"}
+
+```
+
+```{r}
+model_fits_list <- append(model_fits_list, list(mat_models_fits.dt))
+```
+
+```{r}
+dataset_name <- dataset_names[2]
+```
+
+## `r dataset_name`
+
+```{r, child="_plot_gof.Rmd"}
+
+```
+
+```{r}
+model_fits_list <- append(model_fits_list, list(mat_models_fits.dt))
+```
+
+```{r}
+dataset_name <- dataset_names[3]
+```
+
+## `r dataset_name`
+
+```{r, child="_plot_gof.Rmd"}
+
+```
+
+```{r}
+model_fits_list <- append(model_fits_list, list(mat_models_fits.dt))
+```
+
+```{r}
+dataset_name <- dataset_names[4]
+```
+
+## `r dataset_name`
+
+```{r, child="_plot_gof.Rmd"}
+
+```
+
+```{r}
+model_fits_list <- append(model_fits_list, list(mat_models_fits.dt))
+```
+
+# ZINB modelling {.tabset}
+
+```{r}
+match.filter.names <- 
+  data.table(Filter = c("unfiltered", "3sampfilt", "smallestfilt", "halffilt", "condfilt"),
+             FilterName = c("Unfiltered", "Three samples", "Smallest", "Half samples", "By condition"))
+```
+
+```{r}
+gof_dir <- params$outdir
+detection_method <- "CirComPara2"
+```
+
+```{r}
+# model_fit_results <- 
+#   rbindlist(sapply(grep("_gof.tsv",
+#                         dir(gof_dir, pattern = detection_method,
+#                             full.names = T, recursive = T),
+#                         value = T),
+#                    fread, 
+#                    simplify = F))
+model_fit_results <- 
+  rbindlist(model_fits_list)
+```
+
+## AIC density
+
+```{r}
+aic.dat <- 
+  dcast(data = model_fit_results, 
+        formula = Method + circ_id ~ Model, 
+        value.var = "aic")[, deltaAIC := NB - ZINB][]
+
+aic.dat[, c("Dataset", "Filter") := tstrsplit(Method, "_", 
+                                              keep = c(1,2)), 
+        by = Method]
+
+aic.dat <- aic.dat[Dataset %in% c("DM1", "IDC", "IPF", "MS")]
+```
+
+```{r}
+plot.dt <- copy(aic.dat)
+
+plot.dt <- merge(match.filter.names, plot.dt, by = "Filter")
+
+plot.dt$FilterName <- factor(plot.dt$FilterName, 
+                             levels = match.filter.names$FilterName, 
+                             ordered = T)
+```
+
+```{r, fig.width=3, fig.height=4.5}
+ggplot(data = plot.dt, 
+       mapping = aes(color = Dataset, 
+                     fill = Dataset,
+                     x = deltaAIC)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_density(alpha = .2) +
+  scale_x_continuous(name = expression(AIC[NB]-AIC[ZINB]), 
+                     limits = c(-10, 10)) +
+  geom_text(data = data.frame(deltaAIC = 6, 
+                              FilterName = factor("Unfiltered", levels = match.filter.names$FilterName),
+                              Dataset = NA),
+            aes(label = "ZINB is\nbest", y = .4), 
+            color = "black", 
+            show.legend = F) +
+  geom_text(data = data.frame(deltaAIC = -6, 
+                              FilterName = factor("Unfiltered", levels = match.filter.names$FilterName),
+                              Dataset = NA),
+            aes(label = "NB is\nbest", y = .4), 
+            color = "black", 
+            show.legend = F) +
+  labs(y = "Density") +
+  scale_color_tableau(direction = -1) +
+  scale_fill_tableau(direction = -1) +
+  guides(color = guide_legend(nrow = 1)) +
+  guides(fill = guide_legend(nrow = 1)) +
+  facet_grid(rows = vars(FilterName), 
+             scales = "free_y", 
+             labeller = label_wrap_gen(width = 10, multi_line = T)) +
+  theme_classic() +
+  theme(legend.position = "top",
+        text = element_text(size = 10),
+        axis.text.x = element_text(angle = 90, 
+                                   hjust = 1, 
+                                   vjust = .5))
+```
+
+## AIC barfrac
+
+```{r, fig.width=2.5, fig.height=5}
+plot.dt.frac <- 
+  plot.dt[, .(Count = .N), 
+        by = .(Dataset,
+               FilterName, 
+               `Best AIC` = ifelse(deltaAIC > 0, 
+                                   "ZINB", 
+                                   "NB"))
+        ][, Tot := sum(Count), 
+          by = .(Dataset,
+                 FilterName)][, Frac := Count / Tot][]
+
+ggplot(data = plot.dt.frac, 
+       mapping = aes(x = Dataset, 
+                     y = Frac * 100, 
+                     fill = `Best AIC`)) +
+  geom_col() +
+  geom_text(aes(label = round(Frac * 100, 0)), 
+            position = position_stack(vjust = .5)) +
+  scale_fill_brewer(type = "qual") +
+  guides(fill = guide_legend(reverse = T)) +
+  coord_flip(expand = F, clip = "off") +
+  facet_grid(rows = vars(FilterName), scales = "free_y",
+             labeller = label_wrap_gen(width = 10, multi_line = T)) +
+  labs(y = "circRNAs (%)") +
+  theme_classic() +
+  theme(legend.position = "top", axis.text.x = element_text(hjust = .5))
+```
+
+## AIC means
+
+```{r}
+plot.dt.frac[, .(avgFrac = mean(Frac), sdFrac = sd(Frac)), by = `Best AIC`]
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

@@ -1,0 +1,404 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+## required variables from parent Rmd
+# sim_data_list
+# orig_mat_dge
+
+library(DT)
+
+## load auxiliary functions
+source("../../../R/utils/calculateStats.R")
+```
+
+```{r}
+# permutations_cpus <- 8
+# bpparam_permutations <- 
+#   BatchtoolsParam(workers = ceiling(length(unique(featureDF_dt$dataset)) * (nPermutations / permutations_cpus)), 
+#                   saveregistry = F,
+#                   cluster = "slurm",
+#                   resources = list(ncpus = permutations_cpus, 
+#                                    walltime = 3600, # 1h max
+#                                    memory = 4096) # 2048 2 GByte, 4096 4Gb, 8192 8 Gb
+#   )
+# bpparam_permutations <- NULL
+bpparam_permutations <- BiocParallel::MulticoreParam()
+```
+
+```{r}
+simCalculateDispersions <- function(x) {
+  
+  ## filter out not expressed features
+  dge <- edgeR::DGEList(counts = x[['counts']][rowSums(x[['counts']]) > 0, ], 
+                        group  = x[['colData']]$Group)
+  dge <- edgeR::calcNormFactors(dge)
+  design_mm <- model.matrix(~ Group, data = x[['colData']])
+  dge <- edgeR::estimateDisp(dge, design = design_mm)
+  # dge$AveLogCPM <- edgeR::aveLogCPM(dge)
+  dge
+}
+
+simCalculateDispersionsList <- function(sims_list) {
+  
+    bplapply(sims_list, simCalculateDispersions, BPPARAM = MulticoreParam())
+}
+```
+
+```{r}
+# dge_list
+dge_list <- lapply(sim_data_list, simCalculateDispersionsList)
+```
+
+```{r}
+featureDF <- 
+  rbindlist(lapply(dge_list, function(x) {
+    AveBJR <- lapply(x, function(y)data.table(gene_id = rownames(y), 
+                                              AveBJR = rowMeans(y$counts)))
+    AveLogCPM <- lapply(x, function(y)data.table(gene_id = rownames(y), 
+                                                 AveLogCPM = y$AveLogCPM))
+    Fraczero <- lapply(x, function(y)data.table(gene_id = rownames(y), 
+                                                Fraczero = rowMeans(y$counts == 0)))
+    
+    merge(merge(rbindlist(AveBJR, idcol = "dataset"), 
+                rbindlist(AveLogCPM, idcol = "dataset"), 
+                by = c("dataset", "gene_id")), 
+          rbindlist(Fraczero, idcol = "dataset"), 
+          by = c("dataset", "gene_id"))
+  }), 
+  idcol = "Dataset")
+```
+
+```{r}
+sampleDF <- 
+    rbindlist(lapply(dge_list, function(x) {
+        Libsize <- lapply(x, function(y)data.table(sample_id = colnames(y), 
+                                                   Libsize = colSums(y$counts)))
+        Fraczero <- lapply(x, function(y)data.table(sample_id = colnames(y), 
+                                                    Fraczero = colMeans(y$counts == 0)))
+        
+        merge(rbindlist(Libsize, idcol = "dataset"), 
+              rbindlist(Fraczero, idcol = "dataset"), 
+              by = c("dataset", "sample_id"))
+    }), 
+    idcol = "Dataset")
+```
+
+```{r}
+orig_mat_dge <- edgeR::calcNormFactors(orig_mat_dge)
+
+sourceFeatureDF <- 
+    data.table(dataset = "Source",
+               gene_id = rownames(orig_mat_dge),
+               AveBJR = rowMeans(orig_mat_dge$counts),
+               AveLogCPM = edgeR::aveLogCPM(orig_mat_dge),
+               Fraczero = rowMeans(orig_mat_dge$counts == 0))
+
+sourceSampleDF <- 
+    data.table(dataset = "Source",
+               sample_id = colnames(orig_mat_dge), 
+               Libsize = colSums(orig_mat_dge$counts),
+               Fraczero = colMeans(orig_mat_dge$counts == 0))
+
+        
+featureDF_list <- split(featureDF, f = featureDF$Dataset)
+sampleDF_list <- split(sampleDF, f = sampleDF$Dataset)
+```
+
+## Similarity to the source data set
+
+```{r}
+featureDF_dt <- 
+  rbindlist(featureDF_list, 
+            use.names = T)[, dataset := paste(Dataset, 
+                                              formatC(dataset, 
+                                                      width = 2, 
+                                                      flag = "0"), 
+                                              sep = "_")][, Dataset := NULL][]
+
+sampleDF_dt <- 
+  rbindlist(sampleDF_list, 
+            use.names = T)[, dataset := paste(Dataset, 
+                                              formatC(dataset, 
+                                                      width = 2, 
+                                                      flag = "0"), 
+                                              sep = "_")][, Dataset := NULL][]
+```
+
+### Backsplice junction read counts distribution
+
+```{r}
+bjrs_l <- 
+  rbindlist(lapply(c(dge_list, "Source" = list(list(orig_mat_dge))), function(x) {
+    rbindlist(lapply(x, function(y){melt(data = data.table(y$counts, 
+                                                           keep.rownames = "Gene"), 
+                                         id.vars = "Gene", 
+                                         variable.name = "Sample", 
+                                         value.name = "BJR")}),
+              idcol = "dataset")
+  }), 
+  idcol = "Dataset")
+```
+
+```{r, fig.height=4, fig.width=4}
+plot_dt <- bjrs_l[, .N, 
+                  by = .(Dataset, dataset, 
+                         BJR)][, .(AvgCount = mean(N)), 
+                               by = .(Dataset, BJR)][order(Dataset, BJR)]
+plot_dt[, Csum := cumsum(AvgCount), by = .(Dataset)]
+
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+plot_dt[, PcCsum := Csum / max(Csum), by = Dataset]
+
+ggplot(plot_dt, aes(x = BJR, y = PcCsum)) +
+  geom_line(aes(color = Dataset)) +
+  ylab("ECDF") +
+  theme(legend.position = c(.7, .4))
+```
+
+```{r, fig.height=4, fig.width=4}
+ggplot(plot_dt, aes(x = BJR, y = PcCsum, color = Dataset)) +
+  geom_line(size = 1, alpha = .5) +
+  geom_point(size = 2) +
+  ylab("ECDF") +
+  coord_cartesian(xlim = c(0, 10), ylim = c(0.5, 1),
+                  expand = F, clip = "on") +
+  scale_x_continuous(breaks = 0:10) +
+  theme(legend.position = c(.7, .4))
+```
+
+### BJR expression distribution
+
+```{r}
+plot_dt <- rbindlist(list(sourceFeatureDF[, .(Dataset = dataset, AveBJR)], 
+                          rbindlist(featureDF_list)[, .(AveBJR = mean(AveBJR),
+                                                        SdAveLogCPM = sd(AveBJR)), 
+                                                    by = .(Dataset, gene_id)]), 
+                     fill = T)
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+ggplot(plot_dt, aes(x = AveBJR)) +
+  geom_density(aes(color = Dataset)) +
+  facet_grid(rows = vars(SampleSize), scales = "free_y") +
+  scale_x_log10()
+```
+
+### DECs expression
+
+```{r}
+featureDE_ind <- 
+  rbindlist(lapply(setNames(names(sim_data_list), nm = names(sim_data_list)),
+                   function(x, y) {
+                     rbindlist(lapply(y[[x]], 
+                                      function(z) {
+                                        data.table(z$rowData, keep.rownames = "gene_id")
+                                      }), idcol = "dataset")
+                   },
+                   y = sim_data_list), 
+            idcol = "Dataset")
+
+featureDE_ind <- 
+  merge(featureDE_ind, 
+        featureDF, 
+        by = c("Dataset", "dataset", "gene_id"),
+        all = T)
+```
+
+```{r}
+ggplot(featureDE_ind[, .(MedianAvgBJR = median(AveBJR, na.rm = T)), 
+                     by = .(Dataset, dataset, DE.ind)],
+       aes(x = Dataset, y = MedianAvgBJR)) +
+  geom_violin(aes(fill = DE.ind))
+```
+
+```{r}
+ggplot(featureDE_ind,
+       aes(x = AveBJR)) +
+  geom_density(aes(color = dataset, group = dataset)) +
+  scale_x_log10() +
+  facet_grid(rows = vars(ifelse(DE.ind, "DEC", "NotDEC")), 
+             cols = vars(Dataset), 
+             scales = "free_y") +
+  theme(legend.position = "top")
+```
+
+
+### Expression distribution
+
+```{r}
+## expression distribution
+expression_stats <- parallel_calcStats(df = data.frame(featureDF_dt),
+                                     column = "AveLogCPM", 
+                                     permutationPvalues = TRUE, 
+                                     nPermutations = nPermutations, 
+                                     subsampleSize = 500, 
+                                     kmin = 5,
+                                     kfrac = 0.01,
+                                     ref_ds = sourceFeatureDF,
+                                     bpparam = bpparam_permutations)
+
+expression_stats$Dataset <- sub("_[0-9]{2}$", "", expression_stats$dataset)
+```
+
+```{r}
+datatable(data.table(expression_stats)[, lapply(.SD, mean), by = Dataset, 
+                                       .SDcols = grep(pattern = "dataset|Dataset", 
+                                                      x = colnames(expression_stats), 
+                                                      value = T, invert = T)], 
+          rownames = F, 
+          filter = "top", caption = "AveLogCPM") %>%
+  formatRound(grep(pattern = "dataset|Dataset", 
+                   x = colnames(expression_stats), 
+                   value = T, invert = T), digits = 3)
+```
+
+```{r}
+plot_dt <- rbindlist(list(sourceFeatureDF[, .(Dataset = dataset, AveLogCPM)], 
+                          rbindlist(featureDF_list)[, .(AveLogCPM = mean(AveLogCPM),
+                                                        SdAveLogCPM = sd(AveLogCPM)), 
+                                                    by = .(Dataset, gene_id)]), 
+                     fill = T)
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+ggplot(plot_dt, aes(x = AveLogCPM)) +
+  geom_density(aes(color = Dataset)) +
+  facet_grid(rows = vars(SampleSize), scales = "free_y")
+```
+
+### Fraction of zeros per circRNA
+
+```{r}
+## fraction of zeros per circRNA
+featureFracZero_stats <- parallel_calcStats(df = data.frame(featureDF_dt),
+                                     column = "Fraczero", 
+                                     permutationPvalues = TRUE, 
+                                     nPermutations = nPermutations, 
+                                     subsampleSize = 500, 
+                                     kmin = 5,
+                                     kfrac = 0.01,
+                                     ref_ds = sourceFeatureDF,
+                                     bpparam = bpparam_permutations)
+
+featureFracZero_stats$Dataset <- sub("_[0-9]{2}$", "", featureFracZero_stats$dataset)
+```
+
+```{r}
+datatable(data.table(featureFracZero_stats)[, lapply(.SD, mean), by = Dataset, 
+                      .SDcols = grep(pattern = "dataset|Dataset", 
+                                     x = colnames(featureFracZero_stats), 
+                                     value = T, invert = T)], 
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(grep(pattern = "dataset|Dataset", 
+                   x = colnames(featureFracZero_stats), 
+                   value = T, invert = T), digits = 3)
+```
+
+```{r}
+plot_dt <- rbindlist(list(sourceFeatureDF[, .(Dataset = dataset, Fraczero)], 
+                          rbindlist(featureDF_list)[, .(Fraczero = mean(Fraczero),
+                                                        sdFraczero = sd(Fraczero)), 
+                                                    by = .(Dataset, gene_id)]), 
+                     fill = T)
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+ggplot(plot_dt, aes(x = Fraczero)) +
+  geom_density(aes(color = Dataset)) +
+  facet_grid(rows = vars(SampleSize), scales = "free_y")
+```
+
+### Mean expression vs fraction of zeros
+
+```{r}
+## mean expression vs fraction of zeros
+exprVsFracZero_stats <- parallel_calcStats(df = data.frame(featureDF_dt),
+                                     column = c("AveLogCPM", "Fraczero"), 
+                                     permutationPvalues = TRUE, 
+                                     nPermutations = nPermutations, 
+                                     subsampleSize = 500, 
+                                     kmin = 5,
+                                     kfrac = 0.01,
+                                     ref_ds = sourceFeatureDF,
+                                     bpparam = bpparam_permutations)
+
+exprVsFracZero_stats$Dataset <- sub("_[0-9]{2}$", "", exprVsFracZero_stats$dataset)
+```
+
+```{r}
+datatable(data.table(exprVsFracZero_stats)[, lapply(.SD, mean), by = Dataset, 
+                               .SDcols = grep(pattern = "dataset|Dataset", 
+                                              x = colnames(exprVsFracZero_stats), 
+                                              value = T, invert = T)], 
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(grep(pattern = "dataset|Dataset", 
+                   x = colnames(exprVsFracZero_stats), 
+                   value = T, invert = T), digits = 3)
+
+## TODO: save and show
+```
+
+```{r}
+plot_dt <- rbindlist(list(sourceFeatureDF[, .(Dataset = dataset, AveLogCPM, Fraczero)], 
+                          rbindlist(featureDF_list)[, .(Fraczero = mean(Fraczero),
+                                                        AveLogCPM = mean(AveLogCPM)), 
+                                                    by = .(Dataset, gene_id)]), 
+                     fill = T)
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+ggplot(plot_dt, aes(x = AveLogCPM, y = Fraczero)) +
+  geom_point(aes(color = Dataset), alpha = .5, show.legend = F) +
+  geom_smooth(aes(group = Dataset)) +
+  facet_wrap(facets = ~ Dataset, 
+             dir = "v", 
+             ncol = ((length(unique(plot_dt$Dataset)) - 1) / 2) + 1) +
+  theme(legend.position = c(.8, .3))
+```
+
+### Library size vs fraction of zeros
+
+```{r}
+## library size vs fraction of zeros
+libsizeVsFracZero_stats <- parallel_calcStats(df = data.frame(sampleDF_dt),
+                                     column = c("Libsize", "Fraczero"), 
+                                     permutationPvalues = TRUE, 
+                                     nPermutations = nPermutations, 
+                                     subsampleSize = 500, 
+                                     kmin = 5,
+                                     kfrac = 0.01,
+                                     ref_ds = sourceSampleDF,
+                                     bpparam = bpparam_permutations)
+
+libsizeVsFracZero_stats$Dataset <- sub("_[0-9]{2}$", "", libsizeVsFracZero_stats$dataset)
+```
+
+```{r}
+datatable(data.table(libsizeVsFracZero_stats)[, lapply(.SD, mean), by = Dataset, 
+                                  .SDcols = grep(pattern = "dataset|Dataset", 
+                                                 x = colnames(libsizeVsFracZero_stats), 
+                                                 value = T, invert = T)], 
+          rownames = F, 
+          filter = "top") %>%
+  formatRound(grep(pattern = "dataset|Dataset", 
+                   x = colnames(libsizeVsFracZero_stats), 
+                   value = T, invert = T), digits = 3)
+```
+
+```{r}
+plot_dt <- rbindlist(list(sourceSampleDF[, .(Dataset = dataset, Libsize, Fraczero, sample_id)], 
+                          rbindlist(sampleDF_list)[, .(Fraczero = mean(Fraczero),
+                                                        Libsize = mean(Libsize)), 
+                                                    by = .(Dataset, sample_id)]), 
+                     fill = T)
+plot_dt[, c("SampleSize", "ModZero", "DsType") := tstrsplit(Dataset, "_")]
+
+ggplot(plot_dt, aes(x = Libsize, y = Fraczero, color = Dataset)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  scale_x_log10() +
+  theme()
+```

@@ -1,0 +1,289 @@
+---
+title: "Simulations with SPsimSeq"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+params:
+  outdir: "../../../R/simulations/semiparametric/simdata"
+  input_dataset_bjr_file: "../../../data/IDC_unfiltered_CirComPara2_circbjr.csv"
+  input_dataset_meta_file: "../../../data/IDC_meta.csv"
+  n_sims: 3
+  max_circrrnas: 1000
+  dec_fraction: 0.1
+---
+
+```{r}
+## parameters to simulate the data sets
+## number of data sets to simulate
+n.sims <- params$n_sims
+## number of circRNAs to simulate
+Ncircrnas <- params$max_circrrnas #10000 #5000
+## fraction of DECs
+fracDECs <- params$dec_fraction
+
+seed.num <- 2021
+set.seed(seed.num)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load required libraries
+library(data.table)
+library(SPsimSeq)
+library(qs)
+library(BiocParallel)
+library(ggplot2)
+library(scales)
+library(DT)
+library(edgeR)
+```
+
+```{r}
+## load utility functions
+source("../../../R/utils/fun_SPsimSeq.R")
+source("../../../R/utils/sample_circs.R")
+```
+
+```{r}
+dir.create(path = params$outdir, showWarnings = F, recursive = T)
+```
+
+```{r}
+## root path from project dir
+## names of output files
+source_dataset_qs <- file.path(params$outdir, "IDC_trimmed_source_dataset.qs")
+simulated_datasets_qs <- file.path(params$outdir, "IDC_trimmed_simulated_datasets.qs")
+```
+
+# The source data set
+
+Load the original data and make a basic filtering  
+
+```{r}
+# load the original data
+counts_mt <- as.matrix(data.frame(fread(params$input_dataset_bjr_file), 
+                                  row.names = "circ_id"))
+group_dt <- fread(params$input_dataset_meta_file)
+group_df <- data.frame(group_dt, 
+                       row.names = "sample_id")
+```
+
+Data have `r nrow(counts_mt)` circRNAs.  
+
+Samples partitioned between conditions  
+
+```{r}
+cond_parts <- group_dt[, .N, by = condition][, Frac := N/sum(N)][]
+cond_parts
+```
+
+```{r}
+min_samples <- 3
+# remove genes with insufficient expression (important step to avoid bugs)
+counts_mt <- counts_mt[rowSums(counts_mt > 0) >= min_samples, ]
+```
+
+Filtered data have `r nrow(counts_mt)` circRNAs (BJR > 0 in at least `r min_samples` samples).  
+
+```{r}
+lib_sizes <- apply(counts_mt, 2, sum)[rownames(group_df)]
+lib_size_dt <- data.table(group_df, 
+                          Lib_size = lib_sizes, 
+                          keep.rownames = "Sample")
+
+```
+
+## Library size of samples
+
+```{r}
+## compute sample similarity according to library size
+sample_clust_by_libsize <- 
+  hclust(d = dist(x = lib_sizes, method = "euclidean"), 
+         method = "complete")
+
+Nclust_libsize <- 4
+```
+
+```{r}
+sample_libsize_clust_dt <- 
+  merge(data.table(Sample = sample_clust_by_libsize$labels, 
+                   Corder = sample_clust_by_libsize$order,
+                   LibGroup = cutree(tree = sample_clust_by_libsize, 
+                                     k = Nclust_libsize)),
+        lib_size_dt,
+        by = "Sample")
+
+ggplot(sample_libsize_clust_dt,
+       aes(x = factor(LibGroup), y = Lib_size, color = condition)) +
+  geom_boxplot(varwidth = T) +
+  geom_jitter(position = position_dodge2(width = .5), shape = 1)
+```
+
+```{r}
+datatable(sample_libsize_clust_dt[, .(Nsamples = .N,
+                            MaxLibSize = max(Lib_size),
+                            MinLibSize = min(Lib_size)), 
+                        by = .(LibGroup, condition)][order(LibGroup, condition)],
+          rownames = F, filter = "top")
+```
+
+# Simulate datasets
+
+## Prepare the source data set 
+
+Select samples of similar library size from the original data set
+
+```{r}
+## subset original matrix using samples of similar library size
+sample_subset <- sample_libsize_clust_dt[!LibGroup %in% c(), Sample]
+## subset sample metadata 
+sample_table <- group_df[sample_subset, "condition", drop = F]
+
+orig_mat <- counts_mt[, sample_subset]
+
+## keep circRNAs expressed in at least a fraction of the samples
+min_samples <- floor(ncol(orig_mat) / 2) #3
+
+orig_mat <- orig_mat[rowSums(orig_mat > 0) >= min_samples, ]
+```
+
+```{r}
+msg <- paste(dim(orig_mat)[1], "circRNAs in", dim(orig_mat)[2], "samples in the fitered original data set.")
+print(msg)
+```
+
+```{r}
+if(Ncircrnas > nrow(orig_mat)){
+  msg <- paste("The desired number of circRNAs to be simulated (",  
+               Ncircrnas,
+               ") exceeds the maximum number of circRNAs available in this data set.",
+               nrow(orig_mat),
+               "circRNAs will be simulated instead.")
+  warning(msg)
+}
+
+Ncircrnas <- min(nrow(orig_mat), Ncircrnas) 
+```
+
+### Check library size after a first circRNA selection 
+
+```{r}
+plot_dt <- 
+    merge(data.table(data.frame(LibSize = colSums(orig_mat)), 
+                     keep.rownames = "SampleID"), 
+          data.table(sample_table, 
+                     keep.rownames = "SampleID"), 
+          by = "SampleID")
+
+plot_dt$SampleID <- factor(plot_dt$SampleID, levels = plot_dt[order(LibSize), SampleID], ordered = T)
+
+ggplot(plot_dt, 
+       aes(x = SampleID, y = LibSize, fill = condition)) +
+    geom_col() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1),
+          legend.position = "top")
+```
+
+```{r}
+ggplot(plot_dt, 
+       aes(x = condition, y = LibSize, color = condition)) +
+    geom_boxplot(varwidth = T, notch = F) +
+    geom_point() +
+    guides(color = guide_none()) +
+    theme(legend.position = "top")
+```
+
+`r floor(Ncircrnas * fracDECs)` differentially expressed circRNAs will be simulated.  
+
+### Save the source data set
+
+```{r}
+## save source dataset
+orig_mat_dge <- edgeR::DGEList(counts = orig_mat, group = sample_table[colnames(orig_mat), "condition"])
+
+qsave(x = orig_mat_dge, 
+      file = source_dataset_qs, 
+      nthreads = multicoreWorkers(), 
+      preset = "fast")
+```
+
+The source data sets can be loaded from the <a href="`r source_dataset_qs`">`r source_dataset_qs`</a> R object using the <a href="https://cran.r-project.org/web/packages/qs/index.html">qs</a> package.  
+
+## Set parameters to simulate the data sets
+
+### DE data sets
+
+```{r}
+## ---- DE data sets ----
+params_list <- 
+  list(counts_mt = orig_mat,
+       Ncircrnas = Ncircrnas, 
+       fracDECs = fracDECs,
+       cand_DE_genes = NULL, #nonnull_circs_names,
+       group_df = sample_table,
+       w = 0.7,
+       n.sims = n.sims)
+
+bulk_sims_params <- 
+  list(N03_bulk = c(params_list, reps_per_group =  3, model_zeros = FALSE),
+       N05_bulk = c(params_list, reps_per_group =  5, model_zeros = FALSE),
+       N10_bulk = c(params_list, reps_per_group = 10, model_zeros = FALSE))
+```
+
+### Not DE data sets
+
+```{r}
+## ---- no DE data sets ----
+## use the single condition samples and set fraction of DECs = 0
+mock_params_list <- 
+  list(counts_mt = orig_mat, #mock_orig_mat,
+       Ncircrnas = Ncircrnas, 
+       fracDECs = 0,
+       cand_DE_genes = NULL,
+       group_df = sample_table, #mock_sample_table,
+       w = 0.7,
+       n.sims = n.sims)
+
+mock_bulk_sims_params <- 
+  list(N03_bulk_mock = c(mock_params_list, reps_per_group =  3, model_zeros = FALSE),
+       N05_bulk_mock = c(mock_params_list, reps_per_group =  5, model_zeros = FALSE),
+       N10_bulk_mock = c(mock_params_list, reps_per_group = 10, model_zeros = FALSE))
+```
+
+## Do simulations
+
+```{r}
+## do simulations in parallel
+ds_par_list <- 
+  c(bulk_sims_params,
+    mock_bulk_sims_params)
+
+sim_ds_list <-
+  bplapply(ds_par_list,
+           SPsimSeq_simulate,
+           BPPARAM = MulticoreParam(workers = min(length(ds_par_list), 
+                                                  multicoreWorkers())))
+```
+
+```{r}
+qsave(x = sim_ds_list, 
+      file = simulated_datasets_qs, 
+      nthreads = multicoreWorkers(), 
+      preset = "fast")
+```
+
+The simulated data sets can be loaded from the <a href="`r simulated_datasets_qs`">`r simulated_datasets_qs`</a> R object using the <a href="https://cran.r-project.org/web/packages/qs/index.html">qs</a> package.  
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

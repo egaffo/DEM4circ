@@ -1,0 +1,311 @@
+---
+title: "Spliced read count fractions"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+params:
+  outdir: "spliced_read_fractions"
+  datadir: "../../data/PRJCA000751"
+---
+
+```{r setup, include=FALSE}
+outdir <- params$outdir
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = F, 
+                      dev = c("png", "svg", "pdf"),
+                      fig.path = file.path(outdir, "Figs/"),
+                      warning = F)
+
+library(data.table)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+
+library(Rsubread)
+
+library(BiocParallel)
+cpus <- multicoreWorkers() #12 #36
+```
+
+
+```{r, include=FALSE}
+## input files
+ccp2_counts_file <- file.path(params$datadir, "circular_expression/circrna_analyze/reliable_circexp.csv") #PRJCA000751_CirComPara2.csv
+
+# bam_files <- 
+#   dir("/home/enrico/analysis/ccp_tuning/analysis_ccp2/ji_2019/hs2/", 
+#       pattern = "_hisat2.bam$", 
+#       recursive = T, full.names = T)
+
+bam_files <- 
+  dir(file.path(params$datadir, "samples"),  #"bamfiles"
+      pattern = "_hisat2.bam$", 
+      recursive = T, full.names = T)
+
+annotation_gtf <- file.path(params$datadir, "Homo_sapiens.GRCh38.87.gtf")
+
+gene_to_circ_tsv <- file.path(params$datadir,
+                              "circular_expression/circrna_collection/circrna_gene_annotation/gene_to_circ.tsv") #"gene_to_circ.tsv"
+
+# sample_meta <- 
+#   unique(fread("/home/enrico/analysis/ccp_tuning/analysis_ccp2/ji_2019/hs2/Hs_meta.csv", 
+#         select = c("sample", "condition")))
+sample_meta <- 
+  unique(fread(file.path(params$datadir, "Hs_meta.csv"), 
+        select = c("sample", "condition")))
+sample_meta[, Library := "Ribo-"]
+sample_meta[grepl("RNase", condition), Library := "RNase R"]
+sample_meta[, `Match pair` := gsub(" RNase R| total RNA", "", condition)]
+
+# samples <- sub("_hisat2.bam", "", basename(bam_files))#[1:2]
+samples <- sample_meta$sample
+```
+
+```{r}
+## get reliable circRNAs
+ccp2_counts <- melt(fread(ccp2_counts_file), 
+                    id.vars = "circ_id", 
+                    variable.name = "sample_id", 
+                    value.name = "read.count")[read.count > 0][sample_id %in% samples]
+
+## discard intergenic circRNAs
+gene_to_circ <- 
+  fread(gene_to_circ_tsv, 
+        select = c("gene_id", 
+                   "circ_id"))[circ_id %in% unique(ccp2_counts$circ_id) & gene_id != "."]
+
+# reliable_circs <- unique(ccp2_counts[circ_id %in% unique(gene_to_circ[, circ_id]), 
+#                                      circ_id])
+
+# ccp2_counts <- ccp2_counts[circ_id %in% reliable_circs]
+
+## backspliced reads gene expression 
+gene_reads_by_circ <- 
+  merge(ccp2_counts, 
+        gene_to_circ, 
+        by = c("circ_id"), 
+        all = F)[, .(Reads = sum(read.count)), 
+                 by = .(sample_id, gene_id)]
+
+## remove intergenic circRNAs
+ccp2_counts <- 
+  ccp2_counts[circ_id %in% 
+                gene_to_circ[gene_id %in% unique(gene_reads_by_circ$gene_id), 
+                             circ_id]]
+
+fwrite(x = gene_reads_by_circ, file = file.path(outdir, "gene_reads_by_circ.csv"))
+```
+
+```{r, include=FALSE}
+## traditional read count gene expression (all reads)
+fc_genes <- featureCounts(files = bam_files,
+                          annot.ext = annotation_gtf,
+                          isGTFAnnotationFile = T,
+                          GTF.featureType = "gene",
+                          splitOnly = F,
+                          nonSplitOnly = F,
+                          GTF.attrType = "gene_id",
+                          useMetaFeatures = T, 
+                          allowMultiOverlap = T,
+                          countMultiMappingReads = T,
+                          largestOverlap = T,
+                          primaryOnly = T,
+                          strandSpecific = 0, 
+                          isPairedEnd = T,
+                          nthreads = cpus)
+
+gene_counts <- 
+  data.table(fc_genes$counts, 
+             keep.rownames = "gene_id")[gene_id %in% unique(gene_reads_by_circ$gene_id)]
+# colnames(gene_counts) <- c("gene_id", "Reads")
+fwrite(x = gene_counts, file = file.path(outdir, "gene_counts.csv"))
+```
+
+```{r, include=FALSE}
+## spliced reads gene expression 
+fc_genes_spliced <- featureCounts(files = bam_files,
+                                  annot.ext = annotation_gtf,
+                                  isGTFAnnotationFile = T,
+                                  GTF.featureType = "gene",
+                                  splitOnly = T,
+                                  nonSplitOnly = F,
+                                  GTF.attrType = "gene_id",
+                                  useMetaFeatures = T, 
+                                  allowMultiOverlap = T,
+                                  countMultiMappingReads = T,
+                                  largestOverlap = T,
+                                  primaryOnly = T,
+                                  strandSpecific = 0, 
+                                  isPairedEnd = T,
+                                  nthreads = cpus)
+gene_reads_by_spl <- 
+  data.table(fc_genes_spliced$counts, 
+             keep.rownames = "gene_id")[gene_id %in% unique(gene_reads_by_circ$gene_id)]
+# colnames(gene_reads_by_spl) <- c("gene_id", "Reads")
+fwrite(x = gene_reads_by_spl, file = file.path(outdir, "gene_reads_by_spl.csv"))
+```
+
+```{r}
+## compose the single nucleotide backsplice representation
+# sample_circrnas <- ccp2_counts[, .(sample_id, circ_id, read.count)]
+# sn_unique_circ <- 
+#   melt(unique(ccp2_counts[circ_id %in% unique(sample_circrnas$circ_id), 
+#                           .(circ_id, 
+#                             chr, 
+#                             start = as.integer(start+1), 
+#                             stop = as.integer(end))]), 
+#        id.vars = c("chr", "circ_id"))
+sn_unique_circ <-
+  melt(ccp2_counts[, .(circ_id = unique(circ_id))][, c("chr", "start", 
+                                                       "stop") := tstrsplit(circ_id, ":|-", 
+                                                                            type.convert = F), 
+                                                   by = circ_id][, `:=`(start = as.integer(start) + 1L, 
+                                                                        stop = as.integer(stop))], 
+       id.vars = c("chr", "circ_id"))
+
+sn_unique_circ <- 
+  merge(sn_unique_circ, 
+        gene_to_circ[gene_id != "."], 
+        by = "circ_id")
+
+sn_unique_circ_gtf <- 
+  sn_unique_circ[, .(chr, ".", variable, start = value, stop = value, 
+                     ".", "+", ".", 
+                     V9 = paste0("gene_id \"", gene_id, "\"; transcript_id \"", circ_id,  "\";"))]
+
+sn_unique_circ_gtf_file <- file.path(outdir, "sn_unique_circ.gtf")
+fwrite(x = sn_unique_circ_gtf, 
+       file = sn_unique_circ_gtf_file, 
+       col.names = F, row.names = F, sep = "\t", quote = F)
+```
+
+```{r, include=FALSE}
+## spliced reads on circRNA junctions gene expression
+fc_linear_backsplices <- featureCounts(files = bam_files,
+                                       # annot.ext = "sn_unique_circ.gtf", #sn_unique_circ_gtf_file
+                                       annot.ext = unique(sn_unique_circ[, .(GeneID = gene_id,
+                                                                             Chr = chr,
+                                                                             Start = value,
+                                                                             End = value,
+                                                                             Strand = "+")]), 
+                                       # isGTFAnnotationFile = T,
+                                       # GTF.featureType = c("start", "stop"),
+                                       splitOnly = T,
+                                       nonSplitOnly = F,
+                                       # GTF.attrType = "gene_id",
+                                       useMetaFeatures = T, 
+                                       allowMultiOverlap = T,
+                                       countMultiMappingReads = T,
+                                       largestOverlap = T,
+                                       primaryOnly = T,
+                                       strandSpecific = 0, 
+                                       isPairedEnd = T,
+                                       nthreads = cpus)
+
+lin_bks_counts <- 
+  data.table(fc_linear_backsplices$counts, 
+             keep.rownames = "gene_id")
+
+gene_reads_by_bks <- lin_bks_counts[gene_id %in% unique(gene_reads_by_circ$gene_id)]
+  
+fwrite(x = gene_reads_by_bks, file = file.path(outdir, "gene_reads_by_bks.csv"))
+```
+
+# Plot
+
+```{r}
+# ## input files
+# sample_meta <- 
+#   unique(fread("/home/enrico/analysis/ccp_tuning/analysis_ccp2/ji_2019/hs2/Hs_meta.csv", 
+#         select = c("sample", "condition")))
+# sample_meta[, Library := "Ribo-"]
+# sample_meta[grepl("RNase", condition), Library := "RNase R"]
+# sample_meta[, `Match pair` := gsub(" RNase R| total RNA", "", condition)]
+# 
+# gene_counts <- fread("gene_counts.csv")
+# gene_reads_by_spl <- fread("gene_reads_by_spl.csv")
+# gene_reads_by_bks <- fread("gene_reads_by_bks.csv")
+# gene_reads_by_circ <- fread("gene_reads_by_circ.csv")
+```
+
+
+```{r, fig.height=14, fig.width=3.5}
+plot.dt <- 
+  rbindlist(list("Linearly mapped" = melt(gene_counts, 
+                                    id.vars = "gene_id", 
+                                    variable.name = "sample_id", 
+                                    value.name = "Reads"), 
+                 "All spliced" = melt(gene_reads_by_spl, 
+                                        id.vars = "gene_id", 
+                                        variable.name = "sample_id", 
+                                        value.name = "Reads"), 
+                 "Spliced on BJs" = melt(gene_reads_by_bks, 
+                                               id.vars = "gene_id", 
+                                               variable.name = "sample_id", 
+                                               value.name = "Reads"), 
+                 "Backspliced" = gene_reads_by_circ), 
+            use.names = T, 
+            idcol = "Readset")[, sample_id := sub(".hisat2.bam", "", sample_id)][Reads > 0]
+
+plot.dt <- 
+  merge(sample_meta[, .(sample_id = sample, Library, `Match pair`)], 
+      plot.dt,
+      by = "sample_id")
+
+# colnames(plot.dt) <- c("Readset", "gene_id", "Reads")
+
+plot.dt$Readset <- factor(plot.dt$Readset, 
+                          levels = c("Linearly mapped", "All spliced", 
+                                     "Spliced on BJs", 
+                                     "Backspliced"), 
+                          ordered = T)
+```
+
+## All tissues
+
+```{r, fig.height=14, fig.width=3.5}
+ggplot(plot.dt, aes(x = Readset, y = Reads)) +
+  geom_boxplot(outlier.shape = NA, notch = F, varwidth = F,
+               aes(fill = Readset)) +
+  # geom_violin(draw_quantiles = c(.25, .5, .75)) +
+  facet_grid(cols = vars(Library), rows = vars(`Match pair`), 
+             labeller = label_wrap_gen(width = 8), 
+             scales = "free_y") +
+  scale_y_log10("Read count per gene", labels = comma) +
+  scale_fill_gdocs(guide = "none") +
+  xlab("Alignment mode") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+## Only Brain tissue  
+
+```{r, fig.width=4, fig.height=2.5}
+ggplot(plot.dt[`Match pair` == "Brain"], 
+       aes(x = Readset, y = Reads)) +
+  geom_boxplot(outlier.shape = NA, notch = F, varwidth = F,
+               aes(fill = Readset)) +
+  facet_grid(cols = vars(Library), 
+             # rows = vars(`Match pair`), 
+             labeller = label_wrap_gen(width = 8), 
+             scales = "free_y") +
+  scale_y_log10("Read count\nper gene", labels = comma) +
+  scale_fill_gdocs(guide = "none") +
+  xlab("Alignment mode") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank())
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

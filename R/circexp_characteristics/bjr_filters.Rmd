@@ -1,0 +1,323 @@
+---
+title: "Filtering circRNA expression"
+subtitle: "All dataset"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+params:
+  datadir: "../../data"
+  outdir: "bjr_filters"
+---
+
+```{r setup, include=FALSE}
+outdir <- params$outdir
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = F, warning = F, 
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"))
+
+library(data.table)
+library(ggplot2)
+library(scales)
+library(ggthemes)
+```
+
+
+```{r}
+## load unfiltered backsplice junction read data of the different detection tools and data sets
+mat_dir <- params$datadir
+
+ds_names <- c("DM1", "IDC", "IPF", "MS") ## data set names
+mat_file_list <- dir(mat_dir, pattern = paste0(ds_names, ".*circbjr.csv", collapse = "|"), full.names = T)
+mat_file_list <- grep("unfiltered", mat_file_list, value = T)
+names(mat_file_list) <- gsub(paste0(mat_dir, "|_circbjr.csv|/"), "", mat_file_list)
+
+unfiltered_l <- 
+  rbindlist(sapply(mat_file_list, 
+                   function(x)melt(fread(x, showProgress = F), 
+                                   id.vars = "circ_id", 
+                                   value.name = "BJR",
+                                   variable.name = "sample_id"),
+                   simplify = F), idcol = "Name")
+
+unfiltered_l[, c("Ds", "Filter", "CDM") := tstrsplit(Name, "_"), by = Name]
+```
+
+# Cumulative expression raw counts
+
+```{r, fig.height=2.5, fig.width=3.25}
+plot_dt <- unfiltered_l[Filter == "unfiltered" & CDM == "CirComPara2", 
+                  .(`Mean BJR` = mean(BJR)), 
+                  by = .(Ds, circ_id)]
+plot_dt <- 
+  plot_dt[, .N, by = .(Ds, `Mean BJR`)][, .(n_circ = N, 
+                                            `Mean BJR`, 
+                                            cfrac = N / sum(N)), 
+                                        by = .(Ds)]
+
+plot_dt <- 
+  plot_dt[order(Ds, `Mean BJR`), 
+          .(cfrac, 
+            `Mean BJR`, 
+            csum_cfrac = cumsum(cfrac)), 
+          by = Ds]
+
+ggplot(plot_dt, aes(x = `Mean BJR`, 
+                    y = csum_cfrac * 100, 
+                    color = Ds)) +
+  geom_line(size = 1) +
+  scale_x_log10(labels = comma) +
+  scale_color_tableau(name = "Dataset", direction = -1) +
+  labs(y = "Cumulative\ncircRNA fraction (%)") +
+  theme_bw() +
+  theme(legend.position = c(.8, .5),
+        legend.background = element_rect(color = "gray55"),
+        panel.grid.minor = element_blank(), 
+        plot.margin = margin(l = 2, t = 2, r = 20, b = 2))
+  
+  
+```
+
+
+# Filters
+
+```{r}
+## compute and apply expression filters
+source("../utils/fun_expression_filters.R")
+
+read_thr <- 1
+
+# N=3 samples
+min_samples <- 3
+
+three_samples_filtered <- 
+  rbindlist(sapply(X = split(unfiltered_l, 
+                             by = c("Ds", "CDM"), 
+                             keep.by = F, 
+                             flatten = T), 
+                   FUN = function(x) {
+                     melt(data.table(n_samples_filter(dcast(data = x, 
+                                                            formula = circ_id ~ sample_id, 
+                                                            value.var = "BJR", 
+                                                            fill = 0), 
+                                                      rthr = read_thr, 
+                                                      Nsamples = min_samples)), 
+                          value.name = "BJR", 
+                          id.vars = "circ_id", 
+                          variable.name = "sample_id")
+                   }, 
+                   simplify = F), 
+            idcol = "Ds.Filter")[, c("Ds", "CDM") := tstrsplit(x = Ds.Filter, split = "\\."), 
+                                 by = Ds.Filter][, `:=`(Filter = "3sampfilt", 
+                                                        Ds.Filter = NULL)][]
+
+# half samples
+samples_frac <- .5
+
+half_samples_filtered <- 
+  rbindlist(sapply(X = split(unfiltered_l, 
+                             by = c("Ds", "CDM"), 
+                             keep.by = F, 
+                             flatten = T), 
+                   FUN = function(x) {
+                     melt(data.table(fraction_the_samples_filter(dcast(data = x, 
+                                                                       formula = circ_id ~ sample_id, 
+                                                                       value.var = "BJR", 
+                                                                       fill = 0), 
+                                                                 rthr = read_thr, 
+                                                                 frac = samples_frac)), 
+                          value.name = "BJR", 
+                          id.vars = "circ_id", 
+                          variable.name = "sample_id")
+                   }, 
+                   simplify = F), 
+            idcol = "Ds.Filter")[, c("Ds", "CDM") := tstrsplit(x = Ds.Filter, split = "\\."), 
+                                 by = Ds.Filter][, `:=`(Filter = "halffilt", 
+                                                        Ds.Filter = NULL)][]
+
+## load data sets' sample tables
+meta_file_list <- dir(mat_dir, pattern = paste0(ds_names, "_meta.csv", collapse = "|"), full.names = T)
+names(meta_file_list) <- gsub(paste0(mat_dir, "|_meta.csv|/"), "", meta_file_list)
+meta_l <- 
+  rbindlist(sapply(meta_file_list, 
+                   function(x)fread(x, showProgress = F),
+                   simplify = F), 
+            idcol = "Ds", use.names = T)
+
+# smallest group
+smallest_group_filtered <- 
+  rbindlist(sapply(X = split(merge(unfiltered_l, meta_l, by = c("Ds", "sample_id")), 
+                             by = c("Ds", "CDM"), 
+                             keep.by = F, 
+                             flatten = T), 
+                   FUN = function(x) {
+                     melt(data.table(smallest_group_filter(x = dcast(data = x, 
+                                                                     formula = circ_id ~ sample_id, 
+                                                                     value.var = "BJR", 
+                                                                     fill = 0), 
+                                                           rthr = read_thr, 
+                                                           cond = unique(x[, .(sample_id, condition)]))), 
+                          value.name = "BJR", 
+                          id.vars = "circ_id", 
+                          variable.name = "sample_id")
+                   }, 
+                   simplify = F), 
+            idcol = "Ds.Filter")[, c("Ds", "CDM") := tstrsplit(x = Ds.Filter, split = "\\."), 
+                                 by = Ds.Filter][, `:=`(Filter = "smallestfilt", 
+                                                        Ds.Filter = NULL)][]
+
+# condition
+condition_group_filtered <- 
+  rbindlist(sapply(X = split(merge(unfiltered_l, meta_l, by = c("Ds", "sample_id")), 
+                             by = c("Ds", "CDM"), 
+                             keep.by = F, 
+                             flatten = T), 
+                   FUN = function(x) {
+                     melt(data.table(condition_consistent_filter(x = dcast(data = x, 
+                                                                           formula = circ_id ~ sample_id, 
+                                                                           value.var = "BJR", 
+                                                                           fill = 0), 
+                                                                 rthr = read_thr, 
+                                                                 cond = unique(x[, .(sample_id, condition)]))), 
+                          value.name = "BJR", 
+                          id.vars = "circ_id", 
+                          variable.name = "sample_id")
+                   }, 
+                   simplify = F), 
+            idcol = "Ds.Filter")[, c("Ds", "CDM") := tstrsplit(x = Ds.Filter, split = "\\."), 
+                                 by = Ds.Filter][, `:=`(Filter = "condfilt", 
+                                                        Ds.Filter = NULL)][]
+
+## concatenate the molten data
+mats_l <- rbindlist(list(unfiltered_l[, .(circ_id, sample_id, BJR, Ds, CDM, Filter)], 
+                         three_samples_filtered, 
+                         half_samples_filtered, 
+                         smallest_group_filtered,
+                         condition_group_filtered), 
+                    use.names = T)
+
+## save filtered data sets
+fwrite(x = mats_l[CDM == "CirComPara2" &
+                    Filter != "unfiltered"], 
+       file = file.path(outdir, "CirComPara2_filtered_ds.csv"), 
+       row.names = F)
+```
+
+```{r}
+## count circRNAs
+n_circs_l <- mats_l[BJR > 0, 
+                    .N, 
+                    by = .(Ds, Filter, CDM, circ_id)][, .(N_circs = .N), 
+                                                      by = .(Ds, Filter, CDM)]
+
+n_circs_l <- 
+  merge(n_circs_l, 
+        n_circs_l[Filter == "unfiltered", 
+                  .(Ds, CDM, Max_circs = N_circs)],
+        by = c("Ds", "CDM"))
+
+n_circs_l[, circ_frac := N_circs / Max_circs]
+
+## count zeros
+zeros_l <- mats_l[BJR == 0, 
+                    .(N_zeros = .N), 
+                    by = .(Ds, Filter, CDM)]
+zeros_l <- 
+  merge(zeros_l, 
+        mats_l[, .(Mat_dim = .N), 
+               by = .(Ds, Filter, CDM)],
+        by = c("Ds", "Filter", "CDM"))
+
+zeros_l[, zero_frac := N_zeros / Mat_dim]
+
+circs_zeros <- merge(n_circs_l, zeros_l, by = c("Ds", "CDM", "Filter"))
+```
+
+```{r, fig.width=6.69, fig.height=5}
+ggplot(circs_zeros, 
+       aes(x = (1 - circ_frac) * 100, 
+           y = zero_frac * 100)) +
+  geom_point(aes(shape = Filter, 
+                 fill = N_circs), 
+             size = 2, alpha = .8) +
+  labs(x = "Discarded circRNAs (%)",
+       y = "Fraction of zeros (%)") +
+  facet_grid(rows = vars(Ds), 
+             cols = vars(CDM)) +
+  scale_shape_manual(values = 21:25, 
+                     labels = c("Three samples", "By condition", 
+                                "Half samples", "Smallest", "Unfiltered")) +
+  scale_fill_viridis_c(option = "C", trans = "log10") +
+  coord_fixed(ratio = 1, 
+              xlim = c(0, 100), 
+              ylim = c(0, 100)) +
+  guides(shape = guide_legend(nrow = 2, 
+                              override.aes = list(size = 3),
+                              reverse = T,
+                              title.position = "top", 
+                              title = "Filter",
+                              title.hjust = .5),
+         fill = guide_colorbar(title.position = "top", 
+                               title = "CircRNAs", #expression(log[10](CircRNAs)), 
+                               raster = T, 
+                               title.hjust = .5, 
+                               frame.colour = "black", 
+                               draw.ulim = T, 
+                               draw.llim = T)) +
+  theme_bw() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        panel.spacing = unit(.2, "lines"), 
+        strip.text = element_text(size = 8),
+        panel.grid.minor = element_blank())
+```
+
+## Count distribution {.tabset}
+
+```{r}
+match.filter.names <- 
+  data.table(Filter = c("unfiltered", "3sampfilt", "smallestfilt", "halffilt", "condfilt"),
+             FilterName = c("Unfiltered", "Three samples", "Smallest", "Half samples", "By condition"))
+
+```
+
+### Density
+
+```{r, fig.width=6.69, fig.height=5.5}
+plot_dt <- copy(mats_l)
+
+plot_dt <- merge(match.filter.names, plot_dt, by = "Filter")
+
+plot_dt$FilterName <- factor(plot_dt$FilterName, 
+                         levels = match.filter.names$FilterName, 
+                         ordered = T)
+
+ggplot(plot_dt, aes(x = log10(BJR + 1))) +
+  geom_density(aes(color = Ds)) +
+  # scale_x_log10() +
+  facet_grid(rows = vars(FilterName), 
+             cols = vars(CDM), 
+             scales = "free") +
+  labs(y = "Density", x = expression(Log[10](BJR + 1))) +
+  scale_color_tableau(direction = -1) +
+  theme_bw() +
+  theme(legend.position = "top", 
+        panel.grid.major.x = element_blank(),
+        # axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        panel.spacing = unit(.2, "lines"), 
+        strip.text = element_text(size = 8),
+        panel.grid.minor = element_blank())
+```
+
+# Session info 
+
+```{r}
+sessionInfo()
+```
+

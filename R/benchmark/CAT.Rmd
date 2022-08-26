@@ -1,0 +1,990 @@
+---
+title: "Concordance at the top"
+author: "Enrico Gaffo"
+date: 'Compiled: `r format(Sys.Date(), "%d %B, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    df_print: kable
+    number_sections: no
+    theme: united
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+current.dir = "."
+outdir <- "CAT"
+dir.create(path = outdir, showWarnings = F, recursive = T)
+
+knitr::opts_chunk$set(echo = F, warning = F,
+                      fig.path = file.path(outdir, "Figs/"), 
+                      dev = c("png", "svglite", "pdf"))
+```
+
+```{r message=FALSE, warning=FALSE}
+library(data.table)
+# library(qs) ## to fast saving the results
+
+library(ggplot2)
+library(viridis)
+library(ggdendro)
+library(dendsort)
+library(scales)
+library(ggthemes)
+
+library(ffpe) ## for the CATplot
+library(pracma) ## for the trapezoidal function used to compute AUC
+
+library(BiocParallel)
+
+library(ggrastr)
+library(patchwork)
+library(gridGraphics)
+library(seriation)
+
+library(ComplexHeatmap)
+library(circlize)
+library(gridtext)
+```
+
+```{r}
+#' m1, m2 are character strings with the name of the methods to intersect
+#' dt is a sorted data.table of method scores, with 'Method' and 'Cid' columns, 
+#' which are the name of the method's score and the circRNA identifier, respectively.
+getCAT_dt <- function(m1, m2, dt, maxrank = 100) {
+    
+    data.table::data.table(method1 = m1, 
+                           method2 = m2, 
+                           ffpe::CATplot(vec1 = dt[Method == m1, Cid],
+                                         vec2 = dt[Method == m2, Cid], 
+                                         maxrank = maxrank, 
+                                         make.plot = F))
+}
+```
+
+# Method names
+
+```{r}
+method_types <- 
+  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
+                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
+                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
+                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
+                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
+                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
+                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
+                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
+                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
+                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
+                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
+                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
+                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
+             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
+                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+                      "Single cell / metagenome", "Single cell / metagenome"),
+             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
+                            "DESeq2", "DESeq2", "glmGamPoi", 
+                            "DESeq2", "DESeq2", "DESeq2", 
+                            "DESeq2", "DEsingle", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "edgeR", "edgeR", "edgeR", 
+                            "limma", "lncDIFF", "MAST", 
+                            "metagenomeSeq", "monocle", "NBID", 
+                            "NBID", "NOISeqBIO", "PoissonSeq", 
+                            "ROTS", "SAMseq", "Seurat", 
+                            "Seurat", "Voom", "Voom", 
+                            "Voom", "Voom", "Voom", 
+                            "Voom", "Wilcoxon"))
+```
+
+```{r}
+#' A function to mimic the ggplot default palette
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+                          nm = sort(method_types$Method))
+
+method_types_colors.dt <- 
+  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+        method_types, 
+        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+
+method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+                                    method_types_colors.dt$BaseMethod))
+```
+
+```{r, fig.width=2.5, fig.height=6.69}
+plot_dt <- 
+  melt(copy(method_types)[, c("Base", "Parameters", 
+                              "Test") := tstrsplit(Method, "_")][, .(Method,
+                                                                     Type,
+                                                                     `Base tool` = BaseMethod,
+                                                                     Parameters,
+                                                                     Test)], 
+                id.vars = c("Method", "Type"))
+## Fix names
+plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
+plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
+plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
+plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
+plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
+plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
+plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
+plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
+
+plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
+plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
+plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
+plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
+
+plot_dt[variable == "Parameters", value := toupper(value)]
+
+plot_dt$variable <- factor(plot_dt$variable, 
+                           levels = sort((levels(plot_dt$variable))), 
+                           ordered = T)
+
+plot_base_method_color_text <-
+  ggplot(plot_dt[variable != "Test"], 
+         aes(y = Method, 
+             x = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            size = 3) +
+    scale_x_discrete(position = "bottom") +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(),
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = NA), 
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text
+
+plot_base_method_color_text_rot <-
+  ggplot(plot_dt, 
+         aes(x = Method, 
+             y = variable, 
+             color = Method)) +
+  geom_text(aes(label = value), 
+            size = 3, angle = 90) +
+    # scale_x_discrete(position = "bottom") +
+  labs(x = NULL, y = NULL) +
+  coord_cartesian(clip = "off") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(angle = 90, hjust = .5),
+        text = element_text(size = 10),
+        panel.border = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(), 
+        strip.background = element_rect(fill = NA), 
+        panel.spacing.y = unit(0.05, "lines"),
+        panel.spacing.x = unit(.1, "lines"))
+
+# plot_base_method_color_text_rot
+```
+
+```{r}
+method_labels_table <- 
+  dcast(plot_dt[, .(Method, variable, value)], 
+      Method ~ variable)[, .(Method, 
+                             MethodLabel = paste(`Base tool`, 
+                                                 Parameters, #Test, 
+                                                 sep = " "))]
+```
+
+# Base tiles
+
+```{r, fig.width=7, fig.height=4}
+
+plot_dt <- copy(method_types)
+
+plot_base_method_type_tiles <-
+  ggplot(plot_dt, 
+         aes(y = Method, 
+             x = "", fill = Type)) +
+  geom_tile(color = "white", width = 0.9, height = 0.9, 
+            size = .5) +
+  labs(x = NULL, y = NULL) +
+  scale_fill_manual(values = setNames(tableau_color_pal(palette = "Classic Purple-Gray 6")(2), #"Nuriel Stone"
+                                      c("Bulk RNA-seq", "Single cell / metagenome"))) +
+  guides(fill = guide_legend(title = "Method purpose", 
+                             title.position = "left", 
+                             title.hjust = .5)) +
+  theme_dendro() +
+  theme(legend.position = "bottom")
+
+# plot_base_method_type_tiles
+```
+
+# Between method concordance at the top
+
+```{r}
+## data set names prefix
+Datasets <- c("DM1", "IDC", "IPF","MS")
+
+# resDE_datasets <- sapply(Datasets,
+#                          function(d) fread(file = file.path(".", 
+#                                                             paste0(d, "_evaluations/pval_deind.csv.gz")), 
+#                                            showProgress = F),
+#                          simplify = F, USE.NAMES = T)
+
+pval_deind_file <- "overall_evaluations/pval_deind.csv.gz"
+resDE_datasets <- 
+  fread(pval_deind_file)[, Cid := seq_along(preds), 
+                                       by = .(Source_ds, Dataset,  
+                                              Method)]
+
+# preds_dt <- 
+#   rbindlist(resDE_datasets, 
+#             use.names = T, 
+#             idcol = "DS")[, Cid := seq_along(preds), 
+#                           by = .(DS, Dataset,  
+#                                  Method)][order(preds, na.last = T), 
+#                                           .(DS = paste(DS, Dataset, sep = "_"),
+#                                             Cid, Method, preds)]
+
+preds_dt <- resDE_datasets[order(preds, na.last = T), 
+                                 .(DS = paste(Source_ds, Dataset, sep = "_"),
+                                   Cid, Method, preds)]
+
+method_names <- sort(unique(preds_dt$Method))
+
+preds_dt$Method <- factor(preds_dt$Method, 
+                          levels = method_names, 
+                          ordered = T)
+
+# method_colors <- setNames(hue_pal()(length(method_names)), method_names)
+```
+
+
+```{r}
+cats <- 
+  rbindlist(bplapply(X = split(x = preds_dt, f = preds_dt$DS), 
+                     FUN = function(dt){
+                       
+                       ## CAT is symmetric, therefore we can exclude half the pairs
+                       m12 <- data.table(t(combn(levels(dt$Method), m = 2)))
+                       
+                       rbindlist(mapply(getCAT_dt, 
+                                        m1 = m12$V1, m2 = m12$V2, 
+                                        MoreArgs = list(dt = dt, maxrank = 100), 
+                                        SIMPLIFY = F))}, 
+                     BPPARAM = MulticoreParam(workers = min(12, multicoreWorkers()))), 
+            use.names = T, idcol = "Dataset")
+
+cats[, featFrac := rank / max(rank), by = .(Dataset, method1, method2)]
+```
+
+
+```{r}
+## get the area under the CAT curve
+aucats <- cats[, .(AUCAT = pracma::trapz(featFrac, concordance)), 
+               by = .(Dataset, method1, method2)]
+
+## mean AUCAT across all simulated data sets
+maucats <- aucats[, .(MeanAUCAT = mean(AUCAT)), 
+                  by = .(method1, method2)]
+
+## mean AUCAT across simulated data sets per set size
+ss_maucats <- aucats[, .(MeanAUCAT = mean(AUCAT)), 
+                  by = .(method1, method2, 
+                         SetSize = sub("[^_]+_([^_]+)_.*", "\\1", Dataset))]
+```
+
+
+```{r} 
+## mean concordance score at each rank across all simulated data sets
+mconc <- cats[, .(concordance = mean(concordance)), 
+              by = .(method1, method2, featFrac)]
+
+## AUCAT according to the rank mean concordance
+## NB: attach a new column (with redundant values) to ease later plotting
+mconc[, AUCAT := trapz(featFrac, concordance), 
+      by = .(method1, method2)]
+```
+
+
+```{r} 
+## mean concordance score at each rank across simulated data sets per set size
+ss_mconc <- cats[, .(concordance = mean(concordance)), 
+                 by = .(method1, method2, featFrac, 
+                        SetSize = sub("[^_]+_([^_]+)_.*", "\\1", Dataset))]
+
+## AUCAT according to the rank mean concordance
+## NB: attach a new column (with redundant values) to ease later plotting
+ss_mconc[, AUCAT := trapz(featFrac, concordance), 
+      by = .(method1, method2, SetSize)]
+```
+
+```{r} 
+## compose a matrix for clustering and heatmap plotting
+maucats_mat <- as.matrix(data.frame(dcast(maucats,
+                                          method1 ~ method2, 
+                                          value.var = "MeanAUCAT", 
+                                          drop = F,
+                                          fill = NA), 
+                                    row.names = "method1"))
+
+## N.B. only the upper/lower tringular of the matrix is
+maucats_mat <- maucats_mat[sort(rownames(maucats_mat)),
+                           sort(colnames(maucats_mat))]
+
+## add NA diagonal
+cnames <- c(setdiff(rownames(maucats_mat), colnames(maucats_mat)), colnames(maucats_mat))
+rnames <- c(rownames(maucats_mat), setdiff(colnames(maucats_mat), rownames(maucats_mat)))
+
+maucats_mat <- cbind(rep(NA, nrow(maucats_mat)),
+                     maucats_mat)
+maucats_mat <- rbind(maucats_mat,
+                     rep(NA, ncol(maucats_mat)))
+
+colnames(maucats_mat) <- cnames
+rownames(maucats_mat) <- rnames
+# dim(maucats_mat)
+
+maucats_mat[lower.tri(maucats_mat, diag = F)] <- t(maucats_mat)[lower.tri(maucats_mat, diag = F)]
+
+## just check everything is ok
+# isSymmetric(maucats_mat)
+```
+
+```{r} 
+## compose a matrix for clustering and heatmap plotting
+n05ss_maucats_mat <- as.matrix(data.frame(dcast(ss_maucats[SetSize == "N05"],
+                                                method1 ~ method2, 
+                                                value.var = "MeanAUCAT", 
+                                                drop = F,
+                                                fill = NA), 
+                                          row.names = "method1"))
+
+## N.B. only the upper/lower tringular of the matrix is
+n05ss_maucats_mat <- n05ss_maucats_mat[sort(rownames(n05ss_maucats_mat)),
+                                       sort(colnames(n05ss_maucats_mat))]
+
+## add NA diagonal
+n05ss_cnames <- c(setdiff(rownames(n05ss_maucats_mat), colnames(n05ss_maucats_mat)), colnames(n05ss_maucats_mat))
+n05ss_rnames <- c(rownames(n05ss_maucats_mat), setdiff(colnames(n05ss_maucats_mat), rownames(n05ss_maucats_mat)))
+
+n05ss_maucats_mat <- cbind(rep(NA, nrow(n05ss_maucats_mat)),
+                     n05ss_maucats_mat)
+n05ss_maucats_mat <- rbind(n05ss_maucats_mat,
+                     rep(NA, ncol(n05ss_maucats_mat)))
+
+colnames(n05ss_maucats_mat) <- n05ss_cnames
+rownames(n05ss_maucats_mat) <- n05ss_rnames
+# dim(n05ss_maucats_mat)
+
+n05ss_maucats_mat[lower.tri(n05ss_maucats_mat, diag = F)] <- 
+    t(n05ss_maucats_mat)[lower.tri(n05ss_maucats_mat, diag = F)]
+
+## just check everything is ok
+# isSymmetric(n05ss_maucats_mat)
+```
+
+```{r} 
+## compose a matrix for clustering and heatmap plotting
+n10ss_maucats_mat <- as.matrix(data.frame(dcast(ss_maucats[SetSize == "N10"],
+                                                method1 ~ method2, 
+                                                value.var = "MeanAUCAT", 
+                                                drop = F,
+                                                fill = NA), 
+                                          row.names = "method1"))
+
+## N.B. only the upper/lower tringular of the matrix is
+n10ss_maucats_mat <- n10ss_maucats_mat[sort(rownames(n10ss_maucats_mat)),
+                                       sort(colnames(n10ss_maucats_mat))]
+
+## add NA diagonal
+n10ss_cnames <- c(setdiff(rownames(n10ss_maucats_mat), colnames(n10ss_maucats_mat)), colnames(n10ss_maucats_mat))
+n10ss_rnames <- c(rownames(n10ss_maucats_mat), setdiff(colnames(n10ss_maucats_mat), rownames(n10ss_maucats_mat)))
+
+n10ss_maucats_mat <- cbind(rep(NA, nrow(n10ss_maucats_mat)),
+                           n10ss_maucats_mat)
+n10ss_maucats_mat <- rbind(n10ss_maucats_mat,
+                     rep(NA, ncol(n10ss_maucats_mat)))
+
+colnames(n10ss_maucats_mat) <- n10ss_cnames
+rownames(n10ss_maucats_mat) <- n10ss_rnames
+# dim(n10ss_maucats_mat)
+
+n10ss_maucats_mat[lower.tri(n10ss_maucats_mat, diag = F)] <- 
+    t(n10ss_maucats_mat)[lower.tri(n10ss_maucats_mat, diag = F)]
+
+## just check everything is ok
+# isSymmetric(n05ss_maucats_mat)
+```
+
+## Heatmaps {.tabset}
+
+### Clustered N05
+
+```{r} 
+## compute clustering of the methods according to AUCAT: the larger the AUCAT 
+## between methods, the more similar the methods.
+## Use dendsort to improve visualization
+
+# maucats_clust <- hclust(as.dist(1 - n05ss_maucats_mat))
+# n05ss_maucats_clust <- dendsort(hclust(as.dist(1 - n05ss_maucats_mat)))
+# n05ss_maucats_clust <- reorder(hclust(as.dist(1 - n05ss_maucats_mat)), 
+#                                as.dist(1 - n05ss_maucats_mat),
+#                                method = "OLO")
+n05ss_maucats_clust <- seriate(as.dist(1 - n05ss_maucats_mat), method = "OLO")[[1]]
+class(n05ss_maucats_clust) <- "hclust"
+# plot(n05ss_maucats_clust)
+
+# maucats_clust
+n05ss_labels_clust_order <- n05ss_maucats_clust$labels[n05ss_maucats_clust$order]
+```
+
+### Clustered N10
+
+```{r} 
+n10ss_maucats_clust <- seriate(as.dist(1 - n10ss_maucats_mat), method = "OLO")[[1]]
+class(n10ss_maucats_clust) <- "hclust"
+# plot(n10ss_maucats_clust)
+
+n10ss_labels_clust_order <- n10ss_maucats_clust$labels[n10ss_maucats_clust$order]
+```
+
+### Corrplot-like N05
+
+```{r, fig.height=5.5, fig.width=5.5}
+plot_dt <- melt(as.data.table(n05ss_maucats_mat, keep.rownames = "Method"), 
+                id.vars = "Method", 
+                variable.name = "Method2", 
+                value.name = "AUCAT")
+
+## compute the lower mat triangle pairs and erase the corresponding plot
+halfmat <- n05ss_maucats_mat[n05ss_labels_clust_order, n05ss_labels_clust_order]
+halfmat[upper.tri(halfmat, diag = T)] <- NA
+
+halfmat_m <- melt(data.table(halfmat, keep.rownames = "method1"), 
+                  id.vars = "method1", variable.name = "method2",
+                  value.name = "concordance")[method1 != method2]
+na_pairs <- halfmat_m[is.na(concordance), paste(method1, method2)]
+
+plot_dt[, pairname := paste(Method, Method2)]
+plot_dt[pairname %in% na_pairs, AUCAT := NA]
+
+seqpal <- "YlGn"
+# seqpal <- "YlOrRd"
+
+n05_halfheat_plot <- 
+    ggplot(plot_dt, aes(x = Method, y = Method2, 
+                        color = AUCAT,
+                        size = AUCAT,
+                        fill = AUCAT)) +
+    # geom_tile() +
+    geom_point(shape = 21) +
+    coord_fixed() +
+    labs(x = NULL, y = NULL) +
+    scale_size("Concordance\nat the top", range = c(0, 3), guide = "none") +
+    # scale_fill_viridis_c(option = "B", end = .98, direction = 1) +
+    # scale_color_viridis_c(option = "B", end = .98, direction = 1) +
+    scale_fill_distiller("Concordance\nat the top", 
+                         direction = 1, na.value = "white", palette = seqpal) +
+    scale_color_distiller("Concordance\nat the top", 
+                          direction = 1, na.value = "white", palette = seqpal) +
+    guides(color = guide_colorbar(title.position = "top", title.hjust = .5, 
+                                  frame.colour = "black"),
+           fill  = guide_colorbar(title.position = "top", title.hjust = .5, 
+                                  frame.colour = "black")) +
+    scale_x_discrete(limits = n05ss_labels_clust_order, position = "bottom",
+                     labels = data.frame(method_labels_table, 
+                                         row.names = "Method")[n05ss_labels_clust_order, "MethodLabel"]) +
+    scale_y_discrete(limits = n05ss_labels_clust_order, position = "right",
+                     labels = data.frame(method_labels_table, 
+                                         row.names = "Method")[n05ss_labels_clust_order, "MethodLabel"],) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, color = method_colors[n05ss_labels_clust_order]),
+          axis.text.y = element_text(color = method_colors[n05ss_labels_clust_order]),
+          legend.position = c(1.2, -.15),#"bottom",
+          legend.direction = "horizontal", legend.text = element_text(angle = 90, hjust = 1),
+          text = element_text(size = 9),
+          panel.grid = element_blank())
+
+# n05_halfheat_plot
+```
+
+## AUCAT heat plot  {.tabset}
+
+### All
+
+```{r, fig.width=9, fig.height=8.5} 
+# plot_dt <- copy(mconc)
+# 
+# plot_dt <- 
+#     rbindlist(list(plot_dt, 
+#                    copy(plot_dt)[, tmp := method1][, .(method1 = method2, 
+#                                                        method2 = tmp, 
+#                                                        featFrac, 
+#                                                        concordance, 
+#                                                        AUCAT)]))
+# 
+# plot_dt$method1 <- factor(plot_dt$method1, 
+#                           levels = labels_clust_order,
+#                           ordered = T)
+# 
+# plot_dt$method2 <- factor(plot_dt$method2, 
+#                           levels = rev(labels_clust_order),
+#                           ordered = T)
+# 
+# aucat_heatplot <- 
+#   ggplot(plot_dt, aes(x = featFrac, y = concordance, fill = AUCAT)) +
+#   geom_area() +
+#   facet_grid(rows = vars(method1), cols = vars(method2), drop = F) +
+#   scale_fill_viridis() +
+#   # coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+#   coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
+#   theme_dendro() ## theme dendro removes almost everything
+# 
+# aucat_heatplot + 
+#   theme(legend.position = "left",
+#         strip.text.y = element_text(angle =  0, hjust = 0), #, colour = method_colors[rev(labels_clust_order)]
+#         strip.text.x = element_text(angle = 90, hjust = 0), #, colour = method_colors[labels_clust_order]
+#         strip.background = element_blank(),
+#         panel.spacing = unit(0, "cm"))
+```
+
+### N05
+
+```{r, fig.width=9, fig.height=8.5} 
+# plot_dt <- copy(ss_mconc[SetSize == "N05"][, SetSize := NULL])
+# 
+# plot_dt <- 
+#     rbindlist(list(plot_dt, 
+#                    copy(plot_dt)[, tmp := method1][, .(method1 = method2, 
+#                                                        method2 = tmp, 
+#                                                        featFrac, 
+#                                                        concordance, 
+#                                                        AUCAT)]))
+# 
+# plot_dt$method1 <- factor(plot_dt$method1, 
+#                           levels = n05ss_labels_clust_order,
+#                           ordered = T)
+# 
+# plot_dt$method2 <- factor(plot_dt$method2, 
+#                           levels = rev(n05ss_labels_clust_order),
+#                           ordered = T)
+# 
+# n05_aucat_heatplot <- 
+#   ggplot(plot_dt, aes(x = featFrac, y = concordance, fill = AUCAT)) +
+#   geom_area() +
+#   facet_grid(rows = vars(method1), cols = vars(method2), drop = F) +
+#   scale_fill_viridis() +
+#   # coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) +
+#   coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
+#   theme_dendro() ## theme dendro removes almost everything
+# 
+# n05_aucat_heatplot + 
+#   theme(legend.position = "left",
+#         strip.text.y = element_text(angle =  0, hjust = 0), #, colour = method_colors[rev(labels_clust_order)]
+#         strip.text.x = element_text(angle = 90, hjust = 0), #, colour = method_colors[labels_clust_order]
+#         strip.background = element_blank(),
+#         panel.spacing = unit(0, "cm"))
+```
+
+## AUCAT dendrogram {.tabset}
+
+### All top
+
+```{r, warning=FALSE, fig.width=5, fig.height=3}
+# ddata <- 
+#   dendro_data(as.dendrogram(maucats_clust, isReverse = T),
+#               type = "rectangle")
+# 
+# top_dendro <- 
+#   ggplot(segment(ddata), aes(x = x, y = y)) +
+#   geom_segment(aes(xend = xend, yend = yend)) +
+#   scale_x_continuous(name = NULL, 
+#                      trans = "reverse",
+#                      breaks = label(ddata)$x, 
+#                      labels = label(ddata)$label, 
+#                      expand = c(0, 0),
+#                      position = "bottom") +
+#   # scale_y_reverse(name = NULL, expand = c(0, 0.01)) +
+#   scale_y_continuous(name = NULL, expand = c(0, 0)) +
+#   coord_cartesian(xlim = c(.5, 38.5), expand = F) +
+#   # coord_flip() +
+#   # theme_minimal() +
+#   theme_dendro() +
+#   theme(axis.text.x = element_text(color = method_colors[label(ddata)$label], 
+#                                    angle = 90, hjust = 1, vjust = .5),
+#         # axis.text.y = element_text(angle = -35, hjust = .5, vjust = -1),
+#         axis.text.y = element_blank(),
+#         panel.grid.major.x = element_blank(),
+#         panel.grid.minor.x = element_blank(),
+#         panel.grid.major.y = element_blank(),
+#         panel.grid.minor.y = element_blank())
+# 
+# # top_dendro
+```
+
+### All left
+
+```{r, warning=FALSE, fig.width=3, fig.height=5}
+# left_dendro <- 
+#   ggplot(segment(ddata), aes(x = x, y = y)) +
+#   geom_segment(aes(xend = xend, yend = yend)) +
+#   scale_x_continuous(name = NULL, 
+#                      trans = "reverse",
+#                      breaks = label(ddata)$x, 
+#                      labels = label(ddata)$label, 
+#                      expand = c(0, 0),
+#                      position = "top") +
+#   scale_y_reverse(name = NULL, expand = c(0, 0)) +
+#   # scale_y_continuous(name = NULL, expand = c(0, 0.01)) +
+#   # coord_cartesian(xlim = c(.5, 38.5), expand = F) +
+#   coord_flip(xlim = c(.5, 38.5), expand = F) +
+#   # theme_minimal() +  
+#   theme_dendro() +
+#   theme(axis.text.y = element_text(color = method_colors[label(ddata)$label], 
+#                                    angle = 0, hjust = 1),
+#         # axis.text.x = element_text(angle = -35, hjust = .5, vjust = -1),
+#         axis.text.x = element_blank(),
+#         panel.grid.major.x = element_blank(),
+#         panel.grid.minor.x = element_blank(),
+#         panel.grid.major.y = element_blank(),
+#         panel.grid.minor.y = element_blank())
+# 
+# # left_dendro
+```
+
+### N05 
+
+```{r, warning=FALSE, fig.width=3, fig.height=5}
+n05ss_ddata <- 
+  dendro_data(as.dendrogram(n05ss_maucats_clust, isReverse = T),
+              type = "rectangle")
+
+n05ss_right_dendro <- 
+  ggplot(segment(n05ss_ddata), aes(x = y, y = x)) +
+  geom_segment(aes(xend = yend, yend = xend)) +
+  scale_x_continuous(name = NULL, 
+                     expand = c(0, 0),
+                     position = "bottom") +
+  # scale_y_reverse(name = NULL, expand = c(0, 0.01)) +
+  scale_y_continuous(name = NULL, 
+                     # trans = "reverse",
+                     breaks = label(n05ss_ddata)$x, 
+                     labels = label(n05ss_ddata)$label, 
+                     expand = c(0, 0)) +
+  coord_cartesian(ylim = c(.5, 38.5), expand = F) +
+  theme_dendro() +
+  theme(axis.text.y = element_text(color = method_colors[label(n05ss_ddata)$label]),
+        # axis.text.y = element_text(angle = -35, hjust = .5, vjust = -1),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# n05ss_right_dendro
+```
+
+### N05 dendro wrap
+
+```{r, fig.height=5.5, fig.width=4.5}
+method_order <- n05ss_labels_clust_order
+
+## plot the average rank tile plot instead of the mean performance
+n05_dendro_wrap <- 
+    wrap_plots(plot_base_method_color_text +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.margin = unit(c(0, 0, 0, 0), "lines")),
+               plot_base_method_type_tiles +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.background = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               n05ss_right_dendro + 
+                   theme(axis.text.x = element_text(angle = 90, hjust = 1),
+                         axis.text.y = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               nrow = 1, guides = "collect",
+               widths = c(1.5, .1, .3)) & 
+    theme(legend.position = "top",
+          legend.key.size = unit(.7, "lines"),
+          panel.spacing.x = unit(0, "lines"),
+          panel.grid.minor = element_blank(),
+          # plot.margin = margin(0.1, 0.1, 0.1, 0, "lines"),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+
+# n05_dendro_wrap
+```
+
+### N10 dendro wrap
+
+```{r, warning=FALSE, fig.width=3, fig.height=5}
+n10ss_ddata <- 
+  dendro_data(as.dendrogram(n10ss_maucats_clust, isReverse = T),
+              type = "rectangle")
+
+n10ss_right_dendro <- 
+  ggplot(segment(n10ss_ddata), aes(x = y, y = x)) +
+  geom_segment(aes(xend = yend, yend = xend)) +
+  scale_x_continuous(name = NULL, 
+                     expand = c(0, 0),
+                     position = "bottom") +
+  # scale_y_reverse(name = NULL, expand = c(0, 0.01)) +
+  scale_y_continuous(name = NULL, 
+                     # trans = "reverse",
+                     breaks = label(n10ss_ddata)$x, 
+                     labels = label(n10ss_ddata)$label, 
+                     expand = c(0, 0)) +
+  coord_cartesian(ylim = c(.5, 38.5), expand = F) +
+  theme_dendro() +
+  theme(axis.text.y = element_text(color = method_colors[label(n10ss_ddata)$label]),
+        # axis.text.y = element_text(angle = -35, hjust = .5, vjust = -1),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# n10ss_right_dendro
+```
+
+```{r, fig.height=5.5, fig.width=4.5}
+method_order <- n10ss_labels_clust_order
+
+## plot the average rank tile plot instead of the mean performance
+n10_dendro_wrap <- 
+    wrap_plots(plot_base_method_color_text +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.margin = unit(c(0, 0, 0, 0), "lines")),
+               plot_base_method_type_tiles +
+                   scale_y_discrete(limits = method_order) +
+                   theme(plot.background = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               n10ss_right_dendro + 
+                   theme(axis.text.x = element_text(angle = 90, hjust = 1),
+                         axis.text.y = element_blank(),
+                         plot.margin = margin(0, 0, 0, 0, "lines")),
+               nrow = 1, guides = "collect",
+               widths = c(1.5, .1, .3)) & 
+    theme(legend.position = "top",
+          legend.key.size = unit(.7, "lines"),
+          panel.spacing.x = unit(0, "lines"),
+          panel.grid.minor = element_blank(),
+          # plot.margin = margin(0.1, 0.1, 0.1, 0, "lines"),
+          text = element_text(size = 10), 
+          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+
+n10_dendro_wrap
+```
+
+## Combined plot {.tabset}
+
+### All
+
+```{r, fig.width=8, fig.height=7}
+# halfmat <- maucats_mat[labels_clust_order, labels_clust_order]
+# halfmat[lower.tri(halfmat, diag = T)] <- NA
+# halfmat_m <- melt(data.table(halfmat, keep.rownames = "method1"), 
+#                   id.vars = "method1", variable.name = "method2", 
+#                   value.name = "concordance")[method1 != method2]
+# 
+# na_pairs <- halfmat_m[is.na(concordance), paste(method1, method2)]
+# 
+# plot_dt <- copy(mconc)
+# 
+# plot_dt <- 
+#     rbindlist(list(plot_dt, 
+#                    copy(plot_dt)[, tmp := method1][, .(method1 = method2, 
+#                                                        method2 = tmp, 
+#                                                        featFrac, 
+#                                                        concordance, 
+#                                                        AUCAT)]))
+# plot_dt[, pairname := paste(method1, method2)]
+# 
+# plot_dt[pairname %in% na_pairs, concordance := NA]
+# 
+# plot_dt$method1 <- factor(plot_dt$method1, 
+#                           levels = labels_clust_order,
+#                           ordered = T)
+# 
+# plot_dt$method2 <- factor(plot_dt$method2, 
+#                           levels = rev(labels_clust_order),
+#                           ordered = T)
+# 
+# aucat_half_heatplot <- 
+#   ggplot(plot_dt, aes(x = featFrac, y = concordance, fill = AUCAT)) +
+#   geom_area() +
+#   facet_grid(rows = vars(method1), cols = vars(method2), drop = F) +
+#   scale_fill_viridis() +
+#   # coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = F) +
+#   coord_fixed(xlim = c(0, 1), ylim = c(0, 1), expand = F) +
+#   theme_dendro() + ## theme dendro removes almost everything
+#   theme(legend.position = c(.8, .5), #"right",
+#         # strip.text = element_blank(),
+#         strip.background = element_blank(),
+#         panel.spacing = unit(.1, "lines"), 
+#         plot.margin = unit(c(-.5, -.5, -1, -.5), "lines"))
+#         # plot.margin = unit(c(0, -3, -1, -3), "lines"))
+```
+
+
+```{r, fig.width=9, fig.height=9} 
+# # design <- "
+# #   #1
+# #   23
+# # "
+# design <- "#1\n23"
+# 
+# top_dendro +
+#   left_dendro + 
+#   wrap_elements(rasterise(aucat_half_heatplot + 
+#                             theme(strip.text = element_blank(),
+#                                   plot.margin = margin(0, 0, 0, 0, "lines"))), 
+#                 clip = F) + 
+#   # wrap_elements(panel = rasterise(void_square_plot)) + 
+#   plot_layout(design = design, 
+#               widths = c(1, 4), 
+#               heights = c(1, 4)) &
+#     theme(text = element_text(size = 9))
+```
+
+### N05 heatmap + dendro
+
+```{r, fig.width=10.5, fig.height=7}
+wrap_plots(n05_halfheat_plot +
+               theme(#legend.position = "bottom",
+                     axis.text.y = element_blank(), 
+                     # axis.text.x = element_blank(), 
+                     plot.margin = margin(0, 0, 0, 0)),
+           n05_dendro_wrap &
+               theme(legend.position = "bottom",
+                     plot.margin = margin(0, 0, 0, 0),
+                     plot.background = element_blank()),
+           nrow = 1, 
+           widths = c(2, 1.75))  &
+  theme(plot.background = element_rect(fill = "transparent", colour = NA))
+```
+
+### Complex Hetmap
+
+```{r, fig.width=11, fig.height=11}
+# https://jokergoo.github.io/ComplexHeatmap-reference/book/a-single-heatmap.html#cell-fun
+
+## compute the lower mat triangle pairs and erase the corresponding plot
+distmat <- n05ss_maucats_mat[sort(method_names), 
+                             sort(method_names)]
+
+simmat <- distmat
+
+distmat[is.na(distmat)] <- 1
+met_ord_so <- seriate(as.dist(1 - n10ss_maucats_mat), method = "OLO")
+
+method_order <- data.frame(labels = met_ord_so[[1]]$labels, 
+                           x = met_ord_so[[1]]$order, 
+                           row.names = met_ord_so[[1]]$labels)
+method_order <- method_order[method_order$x, ]
+
+library(colorspace)
+colors_vector <- sequential_hcl(n = 3, palette = "TealGrn", rev = T)
+
+col_fun = circlize::colorRamp2(c(0, .5, 1), colors_vector)
+
+# # ## this is just to control that the final plot will keep the correct clustering
+# jsh <- Heatmap(simmat,
+#                name = "Concordance\nat the top 100",
+#                col = col_fun,
+#                rect_gp = gpar(type = "none"),
+#                cell_fun = function(j, i, x, y, width, height, fill) {
+#                  grid.circle(x = x, y = y,
+#                              r = simmat[j, i]/2 * min(unit.c(width,
+#                                                              height)),
+#                              gp = gpar(fill = col_fun(simmat[j, i]),
+#                                        col = NA))
+#                },
+#                row_names_side = "right",
+#                row_dend_side = "right",
+#                column_names_side = "top",
+#                column_dend_side = "top",
+#                width = unit(10, "cm"),
+#                height = unit(10, "cm"),
+#                heatmap_legend_param = list(direction = "horizontal"),
+#                cluster_rows = as.dendrogram(met_ord_so[[1]]),
+#                cluster_columns = as.dendrogram(met_ord_so[[1]]),
+#                # cluster_rows = F,
+#                # cluster_columns = F,
+#                show_row_names = T,
+#                show_column_names = T)
+# draw(jsh, heatmap_legend_side = "bottom")
+
+simmat <- simmat[method_order$label, method_order$label]
+simmat[lower.tri(simmat, diag = T)] <- NA
+simmat <- simmat[method_names, method_names]
+
+method_labels <- data.frame(method_labels_table, row.names = "Method")[method_order$label, , drop = F]
+method_labels_v <- setNames(method_labels$MethodLabel, nm = rownames(method_labels))
+
+# `col = col_fun` here is used to generate the legend
+jsh <- Heatmap(simmat, 
+               name = "Concordance\nat the top 100", 
+               col = col_fun, 
+               rect_gp = gpar(type = "none"), 
+               cell_fun = function(j, i, x, y, width, height, fill) {
+                 if(!is.na(simmat[i, j])) {
+                   # grid.rect(x = x, y = y, width = width, height = height, 
+                   #           gp = gpar(col = "grey", fill = NA))
+                   grid.circle(x = x, y = y, 
+                               r = simmat[i, j]/2 * min(unit.c(width,
+                                                                height)), 
+                               gp = gpar(fill = col_fun(simmat[i, j]), 
+                                         col = NA))
+                 }
+               }, 
+               row_names_side = "right", 
+               row_dend_side = "right", 
+               column_names_side = "top",
+               column_dend_side = "top", 
+               width = unit(10, "cm"), 
+               height = unit(10, "cm"),
+               heatmap_legend_param = list(direction = "horizontal"), 
+               row_labels = gt_render(method_labels_v[rownames(simmat)]),
+               row_names_gp = gpar(col = method_colors[rownames(simmat)], fontsize = 9),
+               column_labels = gt_render(method_labels_v[rownames(simmat)]),
+               column_names_gp = gpar(col = method_colors[rownames(simmat)], fontsize = 9),
+               cluster_rows = as.dendrogram(met_ord_so[[1]]),
+               cluster_columns = as.dendrogram(met_ord_so[[1]]),
+               show_row_names = T, 
+               show_column_names = T)
+
+draw(jsh, heatmap_legend_side = "bottom")
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
