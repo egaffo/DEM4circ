@@ -28,7 +28,7 @@ old_gdocs <- c('#3366cc', '#dc3912', '#ff9900', '#109618', '#990099',
 custom_old_gdocs <- c("#000000", old_gdocs[c(     1,  5,  8,  3,
                                              17,  6,  7, 16,  9,
                                              24, 13, 15, 31, 20,
-                                              4, 30,  2, 18, 14)])
+                                             14, 30,  2, 18,  4)])
 custom_old_gdocs <- as.character(brightness(custom_old_gdocs, delta(.1)))
 # show_col(custom_old_gdocs)
 

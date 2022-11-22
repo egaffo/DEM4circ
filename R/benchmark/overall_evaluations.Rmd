@@ -76,14 +76,6 @@ StN_FN_file <- file.path(output_dir, "StN_FN.csv.gz")
 pval_deind_file <- file.path(output_dir, "pval_deind.csv.gz")
 
 if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
-  ## if either one of the two files is missing then load the required data
-  sumBench_perf_metrics_qs_files <- file.path("benchmark_results", 
-                                              c("DM1", "IPF", "MS", "IDC"), 
-                                              "sumBench_perf_metrics.qs")
-  
-  names(sumBench_perf_metrics_qs_files) <- sub("benchmark_results/", "",
-                                               dirname(sumBench_perf_metrics_qs_files))
-  
   ## read input: the list of the SummarizedBenchmark objects after the performance evaluation 
   # ncpus <- 50
   # bpparam <- BatchtoolsParam(workers = length(sumBench_perf_metrics_qs_files), 
@@ -96,10 +88,29 @@ if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
   ncpus <- multicoreWorkers()
   bpparam <- BiocParallel::SerialParam()
   
+  ## if either one of the two files is missing then load the required data
+  # benchmark_results_dirs <- c("benchmark_results", "benchmark_results_2")
+  benchmark_results_dirs <- c("benchmark_results")
+  sumBench_perf_metrics_qs_files <- unlist(lapply(X = benchmark_results_dirs,
+                                           FUN = file.path, 
+                                           file.path(c("DM1", "IPF", "MS", "IDC"), 
+                                                     "sumBench_perf_metrics.qs")))
+  
+  names(sumBench_perf_metrics_qs_files) <- 
+    sub("benchmark_results", "",
+        dirname(sumBench_perf_metrics_qs_files))
+  
+  ## check if some files are missing and fix the list
+  exist_files <- sapply(sumBench_perf_metrics_qs_files, file.exists)
+  warning("Missed files:\n", paste0(sumBench_perf_metrics_qs_files[!exist_files],
+                                    collapse = "\n"))
+  sumBench_perf_metrics_qs_files <- sumBench_perf_metrics_qs_files[exist_files]
+  
   sbL <- bplapply(sumBench_perf_metrics_qs_files, 
                   qs::qread, 
                   nthreads = ncpus,  #multicoreWorkers()
                   BPPARAM = bpparam)
+  
   
   if(!file.exists(sbAssay_dt_file)){
     ## get the pre-computed performance data
@@ -111,11 +122,18 @@ if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
                                             data.table(as.data.frame(colData(x)), 
                                                        keep.rownames = "Method")
                                           }), 
-                                   idcol = "Dataset")[, c("SetSize", "MZP", "DsType", 
-                                                          "DsId") := tstrsplit(Dataset, "_")]
+                                   idcol = "Dataset", 
+                                   fill = T, 
+                                   use.names = T)[, c("SetSize", "MZP", "DsType", 
+                                                 "DsId") := tstrsplit(Dataset, "_")]
                        }
       ), 
-      idcol = "Source_ds")
+      idcol = "Source_ds", 
+      fill = T, 
+      use.names = T)
+    
+    ## fix Dataset names
+    sbAssay_all_dt[, Source_ds := gsub("^[^/]*/", "", Source_ds), by = Source_ds]
     
     fwrite(sbAssay_all_dt, sbAssay_dt_file)
   }else{
@@ -130,6 +148,7 @@ if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
                         idcol = "Source_ds")
     
     stn_dt[, c("SetSize", "MZP", "Purpose", "ID") := tstrsplit(setID, "_"), by = setID]
+    stn_dt[, Source_ds := gsub("^[^/]*/", "", Source_ds), by = Source_ds]
     
     ## save signal-to-noise statistics
     fwrite(x = stn_dt, file = StN_FP_file)
@@ -145,6 +164,7 @@ if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
                                                       idcol = "setID")), 
                           idcol = "Source_ds")
     stnfn_dt[, c("SetSize", "MZP", "Purpose", "ID") := tstrsplit(setID, "_"), by = setID]
+    stnfn_dt[, Source_ds := gsub("^[^/]*/", "", Source_ds), by = Source_ds]
     
     fwrite(x = stnfn_dt, file = StN_FN_file)
   }else{
@@ -169,6 +189,7 @@ if(!file.exists(sbAssay_dt_file) || !file.exists(StN_FN_file)){
     
     pval_deind_dt[, c("SetSize", "MZP", "DsType", "DsId") := tstrsplit(Dataset, "_"), 
                   by = Dataset]
+    pval_deind_dt[, Source_ds := gsub("^[^/]*/", "", Source_ds), by = Source_ds]
     
     fwrite(pval_deind_dt, 
            pval_deind_file, 
@@ -204,7 +225,9 @@ method_types <-
                         "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
                         "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
                         "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
-                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
+                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", 
+                        # "scCODE_Dt_MT", "scDEA_Dt_MT", 
+                        "seurat_Bim_LRT", 
                         "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
                         "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
                         "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
@@ -217,7 +240,9 @@ method_types <-
                       "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
                       "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
                       "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+                      "Single cell / metagenome", "Bulk RNA-seq", 
+                      # "Single cell / metagenome", "Single cell / metagenome", 
+                      "Single cell / metagenome", 
                       "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
                       "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
                       "Single cell / metagenome", "Single cell / metagenome"),
@@ -230,23 +255,67 @@ method_types <-
                             "limma", "lncDIFF", "MAST", 
                             "metagenomeSeq", "monocle", "NBID", 
                             "NBID", "NOISeqBIO", "PoissonSeq", 
-                            "ROTS", "SAMseq", "Seurat", 
+                            "ROTS", "SAMseq", 
+                            # "scCODE", "scDEA", 
+                            "Seurat", 
                             "Seurat", "Voom", "Voom", 
                             "Voom", "Voom", "Voom", 
                             "Voom", "Wilcoxon"))
 ```
 
 ```{r}
-method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
-                          nm = sort(method_types$Method))
+## set colors
+source("../utils/color_palettes.R")
+# method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+#                           nm = sort(method_types$Method))
+# 
+# method_types_colors.dt <- 
+#   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+#         method_types, 
+#         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# 
+# method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+#                                     method_types_colors.dt$BaseMethod))
 
-method_types_colors.dt <- 
-  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
-        method_types, 
-        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# ggprism_colors20
+# iwanthue_intense20_1
+# pals_polychrome
+# kelly_poly
+# old_gdocs[1:20]
+# show_col(old_gdocs)
+# show_col(custom_old_gdocs)
+baseMethodColor <-  setNames(object = c(custom_old_gdocs), 
+                             nm = unique(method_types$BaseMethod))
 
-method_types_colors <- unlist(split(method_types_colors.dt$Color, 
-                                    method_types_colors.dt$BaseMethod))
+multishade_methods <- merge(method_types[, .N, by = BaseMethod], #[N > 1, ], 
+                            as.data.table(baseMethodColor, keep.rownames = "BaseMethod"),
+                            by = "BaseMethod")
+
+base_color_shades <- mapply(get_color_shades, 
+                            setNames(multishade_methods$N - 1,
+                                     multishade_methods$BaseMethod), 
+                            multishade_methods$baseMethodColor, 
+                            USE.NAMES = T)
+
+method_color_shades <- 
+  rbindlist(sapply(base_color_shades, 
+                   function(x)data.frame(Color = as.character(x)), 
+                   simplify = F), 
+            idcol = "BaseMethod")[order(BaseMethod, Color)]
+
+method_types[order(BaseMethod), Color := method_color_shades$Color]
+
+method_colors <- setNames(object = method_types$Color,
+                          nm = method_types$Method)
+
+# method_types_colors.dt <- 
+#   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+#         method_types, 
+#         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# 
+# method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+#                                     method_types_colors.dt$BaseMethod))
+# show_col(method_colors)
 ```
 
 ## Colored base text
@@ -550,19 +619,19 @@ ggplot(plot_dt,
   scale_color_brewer(Alpha_plot_label, 
                      palette = "Set2",
                      labels = alpha_targets, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   scale_shape_manual(Alpha_plot_label, 
                      labels = alpha_targets, 
                      values = 21:23, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   facet_wrap(~ MethodLabel, #~ Method, 
              scales = "fixed", ncol = 10) +
   scale_y_sqrt(breaks = c(0, 0.01, 0.05, 0.1, 
                           0.25, 0.5, 0.75, 1)) + ## square-root transformed y-axis for increased visibility
   theme_bw() +
-  theme(legend.position = c(.9, .1), 
+  theme(legend.position = "top", #c(.9, .1), 
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
         text = element_text(size = 9),
         strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
@@ -1186,19 +1255,19 @@ ggplot(plot_dt,
   scale_color_brewer(Alpha_plot_label, 
                      palette = "Set2",
                      labels = alpha_targets, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   scale_shape_manual(Alpha_plot_label, 
                      labels = alpha_targets, 
                      values = 21:23, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   facet_wrap(~ MethodLabel, #Method, 
              scales = "fixed", ncol = 10) +
   scale_y_sqrt(breaks = c(0, 0.01, 0.05, 0.1, 
                           0.25, 0.5, 0.75, 1)) + ## square-root transformed y-axis for increased visibility
   theme_bw() +
-  theme(legend.position = c(.9, .1), 
+  theme(legend.position = "top", #c(.9, .1), 
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
         text = element_text(size = 9),
         strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
@@ -1490,7 +1559,7 @@ plot_tpr <-
     #           vjust = .5, 
     #           fontface = "italic", size = 3) +
     labs(x = NULL, y = "TPR") +
-    scale_color_discrete(guide = "none") +
+    scale_color_manual(guide = "none", values = method_colors) +
     scale_shape_discrete("Source data set") +
     scale_y_continuous(breaks = c(0, .25, .5, .75, 1)) +
     theme_bw() +
@@ -1532,18 +1601,18 @@ ggplot(plot_dt,
   scale_color_brewer(Alpha_plot_label, 
                      palette = "Set2",
                      labels = alpha_targets, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   scale_shape_manual(Alpha_plot_label, 
                      labels = alpha_targets, 
                      values = 21:23, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   facet_wrap(~ MethodLabel, #Method, 
              scales = "fixed", ncol = 10) +
   scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
   theme_bw() +
-  theme(legend.position = c(.9, .1), 
+  theme(legend.position = "top", #c(.9, .1), 
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
         text = element_text(size = 9),
         strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
@@ -1573,20 +1642,20 @@ tpr_mat <-
 # method_order <- names(sort(apply(X = tpr_mat, MARGIN = 2, FUN = median, na.rm = T)))
 
 method_order <-
-    dcast(as.data.table(summary(tpr_mat))[, c("Stat", "Val"):=tstrsplit(N, ":", type.convert = T)],
-          V2 ~ Stat, value.var = "Val")[order(`Median `, `1st Qu.`, `3rd Qu.`,
-                                              decreasing = F), gsub(" ", "", V2)]
+  dcast(as.data.table(summary(tpr_mat))[, c("Stat", "Val"):=tstrsplit(N, ":", type.convert = T)],
+        V2 ~ Stat, value.var = "Val")[order(`Median `, `1st Qu.`, `3rd Qu.`,
+                                            decreasing = F), gsub(" ", "", V2)]
 
 panel_dendro <-
   wrap_plots(#tpr_dendro +
-               # theme(plot.margin = margin(0, 0, 0, 0, "lines"),
-               #       axis.text.x = element_blank()),
-             plot_base_method_type_tiles + 
-               scale_x_discrete(limits = method_order, breaks = method_order) +
-               theme_void() + 
-               theme(plot.margin = margin(0, 0, 0, 0, "lines")),  
-             ncol = 1, heights = c(1, .2),
-             guides = "collect") & 
+    # theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+    #       axis.text.x = element_blank()),
+    plot_base_method_type_tiles + 
+      scale_x_discrete(limits = method_order, breaks = method_order) +
+      theme_void() + 
+      theme(plot.margin = margin(0, 0, 0, 0, "lines")),  
+    ncol = 1, heights = c(1, .2),
+    guides = "collect") & 
   theme(legend.position = "top")
 
 # panel_tpr <- 
@@ -1599,37 +1668,37 @@ panel_dendro <-
 #         strip.text = element_blank())
 
 bottom_box <- 
-    plot_base_method_color_text +
-    facet_grid(cols = NULL, rows = vars(variable), 
-               scales = "free_y", drop = T) +
-    scale_x_discrete(limits = method_order) +
-    theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
-          axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
-          strip.text = element_blank()) 
+  plot_base_method_color_text +
+  facet_grid(cols = NULL, rows = vars(variable), 
+             scales = "free_y", drop = T) +
+  scale_x_discrete(limits = method_order) +
+  theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+        axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+        strip.text = element_blank()) 
 
 wrap_plots(panel_dendro & 
-               theme(legend.position = "top"),
+             theme(legend.position = "top"),
            plot_tpr &
-               scale_x_discrete(limits = method_order) &
-               theme(legend.position = "bottom",
-                     axis.text.x = element_blank()), 
+             scale_x_discrete(limits = method_order) &
+             theme(legend.position = "bottom",
+                   axis.text.x = element_blank()), 
            bottom_box &
-               scale_x_discrete(limits = method_order),
+             scale_x_discrete(limits = method_order),
            heights = c(.5, 2, 3), 
            guides = "collect",
            ncol = 1)  & 
-    theme(#legend.position = "top",
-        plot.margin = margin(0, .5, 0, .5, "lines"),
-        legend.key.size = unit(.7, "lines"),
-        legend.position = "top", legend.box = "vertical", 
-        legend.box.margin = margin(0, 0, 0, 0, "lines"),
-        legend.box.spacing = unit(0, "lines"),
-        legend.margin = margin(0, 0, 0, 0, "lines"),
-        legend.spacing.y = unit(.1, "lines"),
-        panel.spacing.x = unit(.05, "lines"),
-        panel.grid.minor = element_blank(),
-        text = element_text(size = 10),
-        plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+  theme(#legend.position = "top",
+    plot.margin = margin(0, .5, 0, .5, "lines"),
+    legend.key.size = unit(.7, "lines"),
+    legend.position = "top", legend.box = "vertical", 
+    legend.box.margin = margin(0, 0, 0, 0, "lines"),
+    legend.box.spacing = unit(0, "lines"),
+    legend.margin = margin(0, 0, 0, 0, "lines"),
+    legend.spacing.y = unit(.1, "lines"),
+    panel.spacing.x = unit(.05, "lines"),
+    panel.grid.minor = element_blank(),
+    text = element_text(size = 10),
+    plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
 ```
 
 ### Characteristics of the false negatives {.tabset}
@@ -2477,7 +2546,7 @@ p0.05N10 <-
 
 ```{r, fig.width=14.5, fig.height=7}
 wrap_plots(p0.05N03 & 
-             labs(x = NULL, y = NULL) &
+             labs(x = NULL) &
              theme(strip.background.y = element_blank(),
                    strip.text.y = element_blank(),
                    panel.grid.minor = element_blank(),
@@ -2523,18 +2592,18 @@ ggplot(plot_dt,
   scale_color_brewer(Alpha_plot_label, 
                      palette = "Set2",
                      labels = alpha_targets, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   scale_shape_manual(Alpha_plot_label, 
                      labels = alpha_targets, 
                      values = 21:23, 
-                     guide = guide_legend(title.position = "top", 
+                     guide = guide_legend(title.position = "left", 
                                           reverse = T)) +
   facet_wrap(~ MethodLabel, #Method, 
              scales = "fixed", ncol = 10) +
   scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
   theme_bw() +
-  theme(legend.position = c(.9, .1), 
+  theme(legend.position = "top", #c(.9, .1), 
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
         text = element_text(size = 9),
         strip.text = element_text(margin = margin(.01, .1, .01, .1, "lines")),
@@ -2891,6 +2960,7 @@ wrap_plots(fdr_dendro +
                        2.5), 
            guides = "collect",
            ncol = 1) &
+  scale_x_discrete(limits = rev(method_order), breaks = rev(method_order)) &
   theme(plot.margin = margin(0, .5, 0, .5, "lines"),
         legend.key.size = unit(.7, "lines"),
         legend.position = "top", legend.box = "vertical", 
@@ -2915,7 +2985,7 @@ plot_dt <- sbAssay_dt[, Seconds := ifelse(grepl("_ZW_", Method), Runtime.2,
                                                       by = .(SetSize, Method)]
 
 method_names <- sort(unique(plot_dt$Method))
-method_colors <- setNames(hue_pal()(length(method_names)), method_names)
+# method_colors <- setNames(hue_pal()(length(method_names)), method_names)
 
 
 method_order <- plot_dt[order(MeanSeconds), unique(Method)]
@@ -2925,34 +2995,36 @@ plot_dt$Method <- factor(plot_dt$Method,
                          ordered = T)
 
 cputime_plot <-
-    ggplot(plot_dt, 
-           aes(x = Method, y = MeanSeconds, color = Method)) +
-    geom_point(aes(shape = SetSize)) +
-    labs(x = NULL, y = "Running time (seconds)") +
-    scale_color_manual(values = method_colors, guide = "none") +
-    scale_shape_manual(name = "Set size", values = 21:23) +
-    scale_y_sqrt(breaks = c(0, 0.1, 1, 10, 30, 60, 120, 240, 360, 480, 1000, 1800)) +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, 
-                                     color = method_colors[levels(plot_dt$Method)]),
-          panel.grid.major.x = element_blank(),
-          legend.position = "top",
-          panel.grid.minor.y = element_blank())
+  ggplot(plot_dt, 
+         aes(x = Method, y = MeanSeconds, color = Method)) +
+  geom_point(aes(shape = SetSize)) +
+  labs(x = NULL, y = "Running time (seconds)") +
+  scale_color_manual(values = method_colors, guide = "none") +
+  scale_shape_manual(name = "Set size", values = 21:23) +
+  scale_y_sqrt(breaks = c(0, 0.1, 1, 10, 30, 60, 120, 240, 360, 480, 1000, 1800)) +
+  scale_x_discrete(limits = method_order)+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5, 
+                                   color = method_colors[levels(plot_dt$Method)]),
+        panel.grid.major.x = element_blank(),
+        legend.position = "top",
+        panel.grid.minor.y = element_blank())
 ```
 
 ```{r, fig.height=4.5, fig.width=6.69}
 wrap_plots(cputime_plot + 
-               theme(axis.text.x = element_blank(), legend.margin = margin(0, 0, 0, 0),
-                     legend.box.margin = margin(0, 0, 0, 0),
-                     plot.margin = margin(0, 0, 0, 0)), 
+             theme(axis.text.x = element_blank(), legend.margin = margin(0, 0, 0, 0),
+                   legend.box.margin = margin(0, 0, 0, 0),
+                   plot.margin = margin(0, 0, 0, 0)), 
            plot_base_method_color_text +
-               facet_grid(cols = NULL, rows = vars(variable), 
-                          scales = "free_y", drop = T) +
-               scale_x_discrete(limits = method_order) +
-               theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
-                     axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
-                     strip.text = element_blank()), 
-           ncol = 1)
+             facet_grid(cols = NULL, rows = vars(variable), 
+                        scales = "free_y", drop = T) +
+             # scale_x_discrete(limits = method_order) +
+             theme(plot.margin = unit(c(0, 0, 0, 0), "lines"),
+                   axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+                   strip.text = element_blank()), 
+           ncol = 1) &
+  scale_x_discrete(limits = method_order)
 ```
 
 
