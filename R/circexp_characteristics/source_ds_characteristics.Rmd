@@ -1,5 +1,5 @@
 ---
-title: "Evaluate benchmark results"
+title: "Source dataset characteristics"
 author: "Enrico Gaffo"
 date: "`r Sys.Date()`"
 output: 
@@ -513,6 +513,136 @@ ggplot(plot_dt,
 ```{r}
 datatable(plot_dt)
 ```
+
+### Downsampling
+
+```{r}
+circ_id_3sDs <- 
+  source_ds_dt[value > 0, .N, 
+                   by = .(DS, circ_id)][N > 2, ]
+
+source_ds_dt_3sf <- 
+  source_ds_dt[circ_id_3sDs[, .(DS, circ_id)], 
+               on = c("DS", "circ_id")]
+
+## get non-zero counts of the matrix
+## compute the amount of reads to remove in each sample
+## to downsize them by 25%, 50% and 75%
+sample_downsizes <-
+  source_ds_dt_3sf[, 
+                   .(Depth = sum(value)), 
+                   by = .(DS, 
+                          sample_id)][, `:=`(`75%` = ceiling(Depth * .25),
+                                             `50%` = ceiling(Depth * .5),
+                                             `25%` = ceiling(Depth * .75))][]
+
+sample_downsizes_l <-
+  melt(sample_downsizes, id.vars = c("DS", "sample_id"), 
+       variable.name = "Down to", 
+       value.name = "Diff")
+
+downsized_samples <- 
+  rbindlist(apply(X = sample_downsizes_l, 
+      MARGIN = 1, 
+      FUN = function(x, y){
+        y <- y[DS == x[1] & sample_id == x[2]]
+        
+        ## select random XX elements (with replacement, 
+        ## one element can be selected more than once
+        ## but no more than its reads
+        circ_list <- 
+          c(y[value == 1, circ_id], 
+            unlist(apply(y[value > 1], 
+                         MARGIN = 1, 
+                         FUN = function(z){
+                           rep(z[2], as.integer(z[4]))
+                         }))
+          )
+        
+        ## subtract the counts
+        merge(y,
+              data.table(t(table(sample(circ_list, as.integer(x[4]), 
+                                        replace = F))))[, .(circ_id = V2, 
+                                                            Resize = N)],
+              by = "circ_id", 
+              all = T)[, Downsampling := x[3]][is.na(Resize), Resize := 0]
+        
+      }, y = source_ds_dt_3sf)
+  )
+
+downsized_samples[Downsampling != "Depth", 
+                 `:=`(value = value - Resize)]
+# names(downsized_samples) <- apply(sample_downsizes_l, 1, paste0, collapse = ",")
+```
+
+
+```{r}
+circ_id_3sDs <- 
+  downsized_samples[value > 0, .N, 
+                   by = .(Downsampling, DS, circ_id)][N > 2, ]
+
+downsized_samples_3sf <- 
+  merge(downsized_samples, 
+        circ_id_3sDs[, .(Downsampling, DS, circ_id)])
+```
+
+
+```{r, fig.width=6.5, fig.height=4.5}
+plot_dt <- 
+  merge(
+    merge(downsized_samples_3sf[, .(Sparsity = sum(value == 0) / .N), 
+                               by = .(Downsampling, DS)],
+          downsized_samples_3sf[, .(Depth = sum(value)), 
+                               by = .(Downsampling, DS, 
+                                      sample_id)][, .(avgDepth = mean(Depth)), 
+                                                  by = .(Downsampling, DS)]
+    ),
+    downsized_samples_3sf[value > 0, 
+                         .(nCircs = length(unique(circ_id))), 
+                         by = .(Downsampling, DS)])
+
+plot_dt[Downsampling == "Depth", Downsampling := "100%"]
+plot_dt$Downsampling <- factor(plot_dt$Downsampling,
+                               levels = c("100%", "75%", "50%", "25%"),
+                               ordered = T)
+
+corfunc <- 
+  function(x, y){
+    ct <- cor.test(x = x, y = y, method = "pearson")
+    list(Pval = ct$p.value, Cor = ct$estimate)
+  }
+
+cortests <- plot_dt[, corfunc(x = avgDepth, y = Sparsity), 
+                    by = .(Downsampling)]
+
+cortests <- 
+  merge(cortests,
+        plot_dt[, .(avgDepth = mean(avgDepth)), by = .(Downsampling)])
+
+ggplot(plot_dt, aes(x = avgDepth, y = Sparsity *100, color = DS)) +
+  geom_smooth(aes(group = Downsampling),
+              color = "black", linetype = "dashed",
+              method = "glm", se = T) +
+  geom_point(aes(fill = log10(nCircs), size = log10(nCircs)), shape = 21) +
+  geom_label_repel(aes(label = DS), show.legend = F) +
+  # facet_grid(rows = vars(Downsampling), scales = "free_x") +
+  facet_wrap(facets = ~ Downsampling, dir = "h", scales = "free_x") +
+  labs(x = "Mean library size") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous("Sparsity (%)", limits = c(0, 100)) +
+  scale_color_tableau(name = "Dataset", direction = -1, guide = "none") +
+  scale_fill_viridis_c("Log10(circRNAs)", option = "B") +
+  # scale_size(name = "Log10(circRNAs)", breaks = sort(plot_dt$nCircs)) +
+  scale_size(name = "Log10(circRNAs)") +
+  geom_label(data = cortests, color = "black", hjust = .5,
+            aes(y = 15, 
+                label = paste0("P=", round(Pval, 2), 
+                              ", r=", round(Cor, 2)))) +
+  theme_bw() +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+```
+
 
 ### PCAs {.tabset}
 
