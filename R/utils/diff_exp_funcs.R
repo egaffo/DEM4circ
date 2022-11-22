@@ -1554,3 +1554,143 @@ wilcoxon_lfc <- function(x) {
 
 wilcoxon_time <- function(x) { rep(as.numeric(x$runtime), length(x$res$pval)) }
 
+
+scCODE_run <- function(countData, group) {
+  ## scCODE installation
+  # necessary1 <- c('doParallel', 'samr','doSNOW','pls')
+  # installed <- necessary1 %in% installed.packages()[, 'Package']
+  # if (length(necessary1[!installed]) >=1){
+  #   install.packages(necessary1[!installed])
+  # }
+  #
+  # necessary2<-c('DESeq2', 'DEsingle',
+  #               'edgeR', 'limma', 'MAST',
+  #               'S4Vectors', 'scDD', 'scmap',
+  #               'SingleCellExperiment', 'SummarizedExperiment')
+  # # installed <- necessary2 %in% installed.packages()[, 'Package']
+  # #
+  # # if (length(necessary2[!installed]) >=1){
+  # #   if (!requireNamespace("BiocManager", quietly = TRUE))
+  # #     install.packages("BiocManager")
+  # #   library(BiocManager)
+  # #   BiocManager::install(necessary2[!installed])
+  # # }
+  # ## exploit renv
+  # install.packages(paste0("bioc::", necessary2))
+  # install.packages(c("nghiavtr/BPSC"))
+  # OGFSC_file <- "OGFSC_0.2.3.tar.gz"
+  # download.file(url = "https://github.com/XZouProjects/OGFSC-R/raw/master/OGFSC_0.2.3.tar.gz",
+  #               destfile = OGFSC_file)
+  # install.packages(OGFSC_file, repos = NULL, type="source")
+  # scCODE_file <- "scCODE_1.2.0.0.tar.gz"
+  # download.file(url = "https://github.com/XZouProjects/scCODE/releases/download/1.2.0.0/scCODE_1.2.0.0.tar.gz",
+  #               destfile = scCODE_file)
+  # install.packages(scCODE_file, repos = NULL, type="source")
+  library(scCODE)
+
+  set.seed(12345)
+  tictoc::tic()
+
+  pvals <- setNames(rep_len(x = NA, length.out = nrow(countData)), rownames(countData))
+
+  data1 <- countData[, which(group == levels(group)[1])]
+  data2 <- countData[, which(group == levels(group)[2])]
+  # There are two parameters selectable. "light", True or False,
+  # default as True, run scCODE in a light version which saves time.
+  # "top_ranked", the number of top-ranked strategies selected (5-10), default as 5.
+  results <- scCODE(data1, data2, light = TRUE, top_ranked = 5)
+
+  ## scCODE gives only the significant genes
+  pvals[as.character(results$DE_results$Gene_name)] <- as.numeric(results$DE_results$P_adjust)
+
+  res <- data.frame(pval = pvals[rownames(countData)],
+                    row.names = rownames(countData))
+
+  lfc <- setNames(rep_len(x = 0, length.out = nrow(countData)), rownames(countData))
+  lfc[as.character(results$DE_results$Gene_name)] <- results$DE_results$logFC
+
+  runtime <- tictoc::toc(log = F, quiet = T)
+
+  list(res = res,
+       lfc = lfc,
+       runtime = runtime$toc - runtime$tic)
+}
+
+scCODE_pv <- function(x) {
+  res <- x$res$pval
+  # res[is.na(res)] <- 1
+  res
+}
+
+scCODE_apv <- function(x) {
+  ## scCODE only gives the P-adjusted
+  res <- x$res$pval
+  # res[is.na(res)] <- 1
+  res
+}
+
+scCODE_lfc <- function(x) {
+  x$lfc
+}
+
+scCODE_time <- function(x) { rep(as.numeric(x$runtime), length(x$res$pval)) }
+
+scDEA_run <- function(countData, group) {
+  ## install
+  # deps <- c("aggregation",
+  #           "nghiavtr/BPSC",
+  #           "statOmics/zingeR",
+  #           "Zhangxf-ccnu/scDEA",
+  #           paste0("bioc::",
+  #                  c("sctransform", "DEsingle", "DESeq2", "edgeR", "MAST", "monocle", "scDD",
+  #                    "limma", "Seurat", "SingleCellExperiment", "scater")))
+  # install.packages(deps)
+
+  library(scDEA)
+
+  set.seed(12345)
+  tictoc::tic()
+
+  Pvals <- scDEA_individual_methods(raw.count = countData,
+                                    cell.label = group,
+                                    BPSC.parallel = T,
+                                    DEsingle.parallel = T,
+                                    DESeq2.parallel = T,
+                                    MAST.parallel = T)
+  combination.Pvals <- lancaster.combination(Pvals = Pvals, weight = TRUE, trimmed = 0.2)
+  adjusted.Pvals <- scDEA.p.adjust(combination.Pvals, adjusted.method = "BH")
+
+  res <- data.frame(pval = combination.Pvals[rownames(countData)],
+                    padj = adjusted.Pvals[rownames(countData)],
+                    row.names = rownames(countData))
+
+  lfc <- setNames(rep_len(x = 0, length.out = nrow(countData)), rownames(countData))
+  # lfc[as.character(results$DE_results$Gene_name)] <- results$DE_results$logFC
+
+  runtime <- tictoc::toc(log = F, quiet = T)
+
+  list(res = res,
+       lfc = lfc,
+       runtime = runtime$toc - runtime$tic)
+
+}
+
+scDEA_pv <- function(x) {
+  res <- x$res$pval
+  # res[is.na(res)] <- 1
+  res
+}
+
+scDEA_apv <- function(x) {
+  ## scCODE only gives the P-adjusted
+  res <- x$res$padj
+  # res[is.na(res)] <- 1
+  res
+}
+
+scDEA_lfc <- function(x) {
+  x$lfc
+}
+
+scDEA_time <- function(x) { rep(as.numeric(x$runtime), length(x$res$pval)) }
+
