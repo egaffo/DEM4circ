@@ -261,6 +261,12 @@ method_types <-
                             "Seurat", "Voom", "Voom", 
                             "Voom", "Voom", "Voom", 
                             "Voom", "Wilcoxon"))
+
+method_types <- method_types[order(toupper(BaseMethod), 
+                                  toupper(Method))]
+method_order <- method_types[order(toupper(BaseMethod), 
+                                  toupper(Method)), 
+                            Method]
 ```
 
 ```{r}
@@ -1018,25 +1024,6 @@ value_cols <-
     grep("FDR", colnames(sbAssay_dt), value = T))
 ```
 
-```{r}
-rejections_pval_pattern <- "rejections_0\\.[015]{2}$"
-
-idvars <- c("SetSize", "Method")
-n_points <- 
-  melt(sbAssay_dt[, c(idvars, 
-                      grep(rejections_pval_pattern, 
-                           colnames(sbAssay_dt), 
-                           value = T)), 
-                  with = F], 
-       id.vars = idvars)
-
-n_points$Alpha <- sub("rejections_", "", n_points$variable)
-
-n_points <- n_points[!is.na(value), .N, by = .(SetSize, Method, Alpha)]
-
-n_points <- merge(method_types, n_points, by = "Method")
-```
-
 ### Tables  {.tabset}
 #### Table - Source set mean
 
@@ -1197,6 +1184,112 @@ datatable(show_dt,
           rownames = F, 
           filter = "top") %>%
   formatRound(gsub("_", " ", value_cols), 3)
+```
+
+### Number of detections {.tabset}
+
+```{r}
+rejections_padj_pattern <- "rejections_0\\.[015]{2}_padj$"
+
+idvars <- c("SetSize", "Method", "Source_ds", "Dataset")
+rejections <- 
+  melt(sbAssay_dt[, c(idvars, 
+                      grep(rejections_pval_pattern, 
+                           colnames(sbAssay_dt), 
+                           value = T)), 
+                  with = F], 
+       id.vars = idvars)
+
+rejections[, Alpha := sub("rejections_", "", variable), by = variable]
+
+# n_points <- rejections[value > 0, .N, by = .(SetSize, Method, Alpha)]
+```
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+plot_dt <- rejections
+
+method_order <-method_types[order(toupper(BaseMethod), toupper(Method)), Method]
+```
+
+#### N03
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N03" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
+```
+
+#### N05
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N05" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
+```
+
+#### N10
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N10" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
 ```
 
 ### FDR {.tabset}
