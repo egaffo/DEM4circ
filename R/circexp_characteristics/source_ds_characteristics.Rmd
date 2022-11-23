@@ -729,7 +729,7 @@ Sequencing saturation is dependent on the library complexity and sequencing dept
 #   scale_y_log10()
 ```
 
-The lines show how the number of detected features increases with depth. When the number of samples to plot is 1 or 2, bars indicating the number of new features detected when increasing the sequencing depth in one million of reads are also drawn. In that case, lines values are to be read in the left Y axis and bar values in the right Y axis. If more than 2 samples are to be plotted, it is dicult to visualize the new detection bars, so only the lines are shown in the plot.  
+The lines show how the number of detected features increases with depth. When the number of samples to plot is 1 or 2, bars indicating the number of new features detected when increasing the sequencing depth in one million of reads are also drawn. In that case, lines values are to be read in the left Y axis and bar values in the right Y axis. If more than 2 samples are to be plotted, it is difficult to visualize the new detection bars, so only the lines are shown in the plot.  
 Left Y axis shows the number of detected genes with more than 0 counts at each sequencing depth, represented by the lines. The solid point in each line corresponds to the real available sequencing depth. The other sequencing depths are simulated from this total sequencing depth. The bars are associated to the right Y axis and show the number of new features detected per million of new sequenced reads at each sequencing depth.  
 The legend in the gray box also indicates the percentage of total features detected with more than k=0 counts at the real sequencing depth.  
 Up to twelve samples can be displayed in this plot.  
