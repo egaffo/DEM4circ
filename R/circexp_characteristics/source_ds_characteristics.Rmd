@@ -356,6 +356,217 @@ ggplot(plot_dt,
 datatable(plot_dt)
 ```
 
+### Downsampling {.tabset}
+
+#### Sparsity  
+
+```{r}
+## get non-zero counts of the matrix
+## compute the amount of reads to remove in each sample
+## to downsize them by 25%, 50% and 75%
+sample_downsizes <-
+  source_ds_dt[, 
+               .(Depth = sum(value)), 
+               by = .(DS, 
+                      sample_id)][, `:=`(`75%` = ceiling(Depth * .25),
+                                         `50%` = ceiling(Depth * .5),
+                                         `25%` = ceiling(Depth * .75))][]
+
+sample_downsizes_l <-
+  melt(sample_downsizes, id.vars = c("DS", "sample_id"), 
+       variable.name = "Down to", 
+       value.name = "Diff")
+
+downsized_samples <- 
+  rbindlist(apply(X = sample_downsizes_l, 
+      MARGIN = 1, 
+      FUN = function(x, y){
+        y <- y[DS == x[1] & sample_id == x[2]]
+        
+        ## select random XX elements (with replacement, 
+        ## one element can be selected more than once
+        ## but no more than its reads
+        circ_list <- 
+          c(y[value == 1, circ_id], 
+            unlist(apply(y[value > 1], 
+                         MARGIN = 1, 
+                         FUN = function(z){
+                           rep(z[2], as.integer(z[4]))
+                         }))
+          )
+        
+        ## subtract the counts
+        merge(y,
+              data.table(t(table(sample(circ_list, as.integer(x[4]), 
+                                        replace = F))))[, .(circ_id = V2, 
+                                                            Resize = N)],
+              by = "circ_id", 
+              all = T)[, Downsampling := x[3]][is.na(Resize), Resize := 0]
+        
+      }, y = source_ds_dt)
+  )
+
+downsized_samples[Downsampling != "Depth", 
+                 `:=`(value = value - Resize)]
+
+downsize_stats <- 
+  downsized_samples[value > 0, 
+                        .(Depth = sum(value),
+                          meanBJR = mean(value),
+                          medianBJR = median(value),
+                          nCircs = .N), 
+                        by = .(Downsampling, DS, 
+                               sample_id)]
+```
+
+
+```{r, fig.width=6.5, fig.height=4.5}
+plot_dt <- 
+  merge(
+    merge(downsized_samples[, .(Sparsity = sum(value == 0) / .N), 
+                            by = .(Downsampling, DS)],
+          downsize_stats[, .(avgDepth = mean(Depth)), 
+                         by = .(Downsampling, DS)]
+    ),
+    downsized_samples[value > 0, 
+                          .(nCircs = length(unique(circ_id))), 
+                          by = .(Downsampling, DS)])
+
+plot_dt[Downsampling == "Depth", Downsampling := "100%"]
+plot_dt$Downsampling <- factor(plot_dt$Downsampling,
+                               levels = c("100%", "75%", "50%", "25%"),
+                               ordered = T)
+
+corfunc <- 
+  function(x, y){
+    ct <- cor.test(x = x, y = y, method = "pearson")
+    list(Pval = ct$p.value, Cor = ct$estimate)
+  }
+
+cortests <- plot_dt[, corfunc(x = avgDepth, y = Sparsity), 
+                    by = .(Downsampling)]
+
+cortests <- 
+  merge(cortests,
+        plot_dt[, .(avgDepth = mean(avgDepth)), by = .(Downsampling)])
+
+ggplot(plot_dt, aes(x = avgDepth, y = Sparsity *100, color = DS)) +
+  geom_smooth(aes(group = Downsampling),
+              color = "black", linetype = "dashed",
+              method = "glm", se = T) +
+  geom_point(aes(fill = log10(nCircs), size = log10(nCircs)), shape = 21) +
+  geom_label_repel(aes(label = DS), show.legend = F) +
+  # facet_grid(rows = vars(Downsampling), scales = "free_x") +
+  facet_wrap(facets = ~ Downsampling, dir = "h", scales = "free_x") +
+  labs(x = "Mean library size") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous("Sparsity (%)", limits = c(0, 100)) +
+  scale_color_tableau(name = "Dataset", direction = -1, guide = "none") +
+  scale_fill_viridis_c("Log10(circRNAs)", option = "B") +
+  # scale_size(name = "Log10(circRNAs)", breaks = sort(plot_dt$nCircs)) +
+  scale_size(name = "Log10(circRNAs)") +
+  geom_label(data = cortests, color = "black", hjust = .5,
+            aes(y = 15, 
+                label = paste0("P=", round(Pval, 2), 
+                              ", r=", round(Cor, 2)))) +
+  theme_bw() +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+```
+
+#### Saturation plot (NOISeq)
+
+The "Saturation" plot shows the number of features in the genome detected with more than k counts with the sequencing depth of the sample, and with higher and lower simulated sequencing depths.  
+The number of detected features per biotype at increasing sequencing depths and also the new detections per each million of new sequencing reads.  
+
+Sequencing saturation is dependent on the library complexity and sequencing depth. Different cell types will have different amounts of RNA and thus will differ in the total number of different transcripts in the final library (also known as library complexity). As sequencing depth increases, more genes are detected, but this reaches saturation at different sequencing depths depending on cell type.   
+
+The lines show how the number of detected features increases with depth. When the number of samples to plot is 1 or 2, bars indicating the number of new features detected when increasing the sequencing depth in one million of reads are also drawn. In that case, lines values are to be read in the left Y axis and bar values in the right Y axis. If more than 2 samples are to be plotted, it is difficult to visualize the new detection bars, so only the lines are shown in the plot.  
+Left Y axis shows the number of detected genes with more than 0 counts at each sequencing depth, represented by the lines. The solid point in each line corresponds to the real available sequencing depth. The other sequencing depths are simulated from this total sequencing depth. The bars are associated to the right Y axis and show the number of new features detected per million of new sequenced reads at each sequencing depth.  
+The legend in the gray box also indicates the percentage of total features detected with more than k=0 counts at the real sequencing depth.  
+Up to twelve samples can be displayed in this plot.  
+
+```{r, fig.width=6.5, fig.height=4.5}
+ds_mats_l <- 
+  sapply(split(source_ds_dt, by = "DS", keep.by = F), 
+         function(x){
+           as.matrix(data.frame(dcast(x, formula = circ_id ~ sample_id, 
+                                      value.var = "value", fill = 0), 
+                                row.names = "circ_id"))
+         }, simplify = F, 
+         USE.NAMES = T)
+
+suppressPackageStartupMessages(library(NOISeq))
+mydata_dm1 <- ExpressionSet(assayData = ds_mats_l$DM1)
+mysaturation_dm1 <- dat(mydata_dm1, k = 0, ndepth = 7, type = "saturation")
+
+mydata_idc <- ExpressionSet(ds_mats_l$IDC)
+mysaturation_idc <- dat(mydata_idc, k = 0, ndepth = 7, type = "saturation")
+
+mydata_ipf <- ExpressionSet(ds_mats_l$IPF)
+mysaturation_ipf <- dat(mydata_ipf, k = 0, ndepth = 7, type = "saturation")
+
+mydata_ms <- ExpressionSet(ds_mats_l$MS)
+mysaturation_ms <- dat(mydata_ms, k = 0, ndepth = 7, type = "saturation")
+```
+
+```{r, fig.width=6.5, fig.height=4.5}
+sat_dat <- 
+  rbindlist(sapply(list(DM1 = mysaturation_dm1,
+                        IDC = mysaturation_idc, 
+                        IPF = mysaturation_ipf,
+                        MS = mysaturation_ms), 
+                   function(mysat){
+                     merge(melt(rbindlist(sapply(mysat@dat$depth, 
+                                                 function(x){data.table(t(x))}, 
+                                                 simplify = F), 
+                                          idcol = "sample_id"), 
+                                id.vars = "sample_id", variable.name = "Sampling", 
+                                value.name = "Depth"),
+                           melt(rbindlist(sapply(mysat@dat$saturation$global, 
+                                                 function(x){data.table(t(x))}, 
+                                                 simplify = F), 
+                                          idcol = "sample_id"), 
+                                id.vars = "sample_id", variable.name = "Sampling", 
+                                value.name = "CircRNAs"), 
+                           by = c("sample_id", "Sampling"))
+                   }, simplify = F, USE.NAMES = T), 
+            idcol = "DS")
+
+sat_dat <- merge(sat_dat, source_ds_meta, by = c("DS", "sample_id"))
+
+ggplot(sat_dat, #[Sampling %in% paste0("V", 1:4)], 
+       aes(x = Depth, y = CircRNAs, color = DS)) +
+  geom_line(aes(group = sample_id), alpha = .5) +
+  geom_point(alpha = 1, shape = 21, fill = "white") +
+  geom_point(data = sat_dat[Sampling %in% "V4"], 
+             alpha = .75, shape = 21, #size = 2.5, 
+             aes(fill = DS)) +
+  facet_wrap(facets = ~ DS, scales = "free") +
+  scale_color_tableau(direction = -1, guide = "none") +
+  scale_fill_tableau(direction = -1, guide = "none") +
+  labs(x = "Library size (reads)", y = "Number of circRNAs detected") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank())
+```
+
+```{r, fig.width=6.5, fig.height=4.5}
+ggplot(sat_dat, #[Sampling %in% paste0("V", 1:4)], 
+       aes(x = Depth, y = CircRNAs, color = DS)) +
+  geom_line(aes(group = sample_id), alpha = .5) +
+  geom_point(alpha = 1, shape = 21, fill = "white") +
+  geom_point(data = sat_dat[Sampling %in% "V4"], 
+             alpha = .75, shape = 21, #size = 2.5, 
+             aes(fill = DS)) +
+  # facet_wrap(facets = ~ DS, scales = "free") +
+  scale_color_tableau(name = "Data set", direction = -1) +
+  scale_fill_tableau(name = "Data set", direction = -1) +
+  labs(x = "Library size (reads)", y = "Number of circRNAs detected") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), legend.position = c(.7, .3))
+```
+
+
 ### 3 samples filter {.tabset}
 
 Data sets after filtering according to circRNAs detected in 3 or more samples.  
