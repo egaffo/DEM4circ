@@ -215,191 +215,197 @@ alpha_targets <- c(0.01, 0.05, 0.1)
 # Methods characteristics {.tabset}
 
 ```{r}
-method_types <- 
-  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
-                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
-                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
-                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
-                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
-                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
-                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
-                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
-                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
-                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", 
-                        # "scCODE_Dt_MT", "scDEA_Dt_MT", 
-                        "seurat_Bim_LRT", 
-                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
-                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
-                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
-             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Single cell / metagenome", "Bulk RNA-seq", 
-                      # "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Single cell / metagenome", "Single cell / metagenome"),
-             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
-                            "DESeq2", "DESeq2", "glmGamPoi", 
-                            "DESeq2", "DESeq2", "DESeq2", 
-                            "DESeq2", "DEsingle", "edgeR", 
-                            "edgeR", "edgeR", "edgeR", 
-                            "edgeR", "edgeR", "edgeR", 
-                            "limma", "lncDIFF", "MAST", 
-                            "metagenomeSeq", "monocle", "NBID", 
-                            "NBID", "NOISeqBIO", "PoissonSeq", 
-                            "ROTS", "SAMseq", 
-                            # "scCODE", "scDEA", 
-                            "Seurat", 
-                            "Seurat", "Voom", "Voom", 
-                            "Voom", "Voom", "Voom", 
-                            "Voom", "Wilcoxon"))
-
-method_types <- method_types[order(toupper(BaseMethod), 
-                                  toupper(Method))]
-method_order <- method_types[order(toupper(BaseMethod), 
-                                  toupper(Method)), 
-                            Method]
+# method_types <- 
+#   data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
+#                         "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
+#                         "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
+#                         "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
+#                         "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
+#                         "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
+#                         "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
+#                         "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
+#                         "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
+#                         "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", 
+#                         # "scCODE_Dt_MT", "scDEA_Dt_MT", 
+#                         "hytest_TMM_HG",
+#                         "seurat_Bim_LRT", 
+#                         "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
+#                         "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
+#                         "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
+#              Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+#                       "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
+#                       "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+#                       "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
+#                       "Single cell / metagenome", "Bulk RNA-seq", 
+#                       # "Single cell / metagenome", "Single cell / metagenome", 
+#                       "Bulk RNA-seq", 
+#                       "Single cell / metagenome", 
+#                       "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
+#                       "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
+#                       "Single cell / metagenome", "Single cell / metagenome"),
+#              BaseMethod = c("circMeta", "circMeta", "DESeq2", 
+#                             "DESeq2", "DESeq2", "glmGamPoi", 
+#                             "DESeq2", "DESeq2", "DESeq2", 
+#                             "DESeq2", "DEsingle", "edgeR", 
+#                             "edgeR", "edgeR", "edgeR", 
+#                             "edgeR", "edgeR", "edgeR", 
+#                             "limma", "lncDIFF", "MAST", 
+#                             "metagenomeSeq", "monocle", "NBID", 
+#                             "NBID", "NOISeqBIO", "PoissonSeq", 
+#                             "ROTS", "SAMseq", 
+#                             # "scCODE", "scDEA", 
+#                             "Hy-test",
+#                             "Seurat", 
+#                             "Seurat", "Voom", "Voom", 
+#                             "Voom", "Voom", "Voom", 
+#                             "Voom", "Wilcoxon"))
+# 
+# method_types <- method_types[order(toupper(BaseMethod), 
+#                                   toupper(Method))]
+# method_order_alf <- method_order <- method_types[order(toupper(BaseMethod), 
+#                                                        toupper(Method)), 
+#                                                  Method]
 ```
 
 ```{r}
-## set colors
-source("../utils/color_palettes.R")
-# method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
-#                           nm = sort(method_types$Method))
+# ## set colors
+# source("../utils/color_palettes.R")
+# # method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
+# #                           nm = sort(method_types$Method))
+# # 
+# # method_types_colors.dt <- 
+# #   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+# #         method_types, 
+# #         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# # 
+# # method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+# #                                     method_types_colors.dt$BaseMethod))
 # 
-# method_types_colors.dt <- 
-#   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
-#         method_types, 
-#         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# # ggprism_colors20
+# # iwanthue_intense20_1
+# # pals_polychrome
+# # kelly_poly
+# # old_gdocs[1:20]
+# # show_col(old_gdocs)
+# # show_col(custom_old_gdocs)
+# baseMethodColor <-  setNames(object = c(custom_old_gdocs), 
+#                              nm = unique(method_types$BaseMethod))
 # 
-# method_types_colors <- unlist(split(method_types_colors.dt$Color, 
-#                                     method_types_colors.dt$BaseMethod))
-
-# ggprism_colors20
-# iwanthue_intense20_1
-# pals_polychrome
-# kelly_poly
-# old_gdocs[1:20]
-# show_col(old_gdocs)
-# show_col(custom_old_gdocs)
-baseMethodColor <-  setNames(object = c(custom_old_gdocs), 
-                             nm = unique(method_types$BaseMethod))
-
-multishade_methods <- merge(method_types[, .N, by = BaseMethod], #[N > 1, ], 
-                            as.data.table(baseMethodColor, keep.rownames = "BaseMethod"),
-                            by = "BaseMethod")
-
-base_color_shades <- mapply(get_color_shades, 
-                            setNames(multishade_methods$N - 1,
-                                     multishade_methods$BaseMethod), 
-                            multishade_methods$baseMethodColor, 
-                            USE.NAMES = T)
-
-method_color_shades <- 
-  rbindlist(sapply(base_color_shades, 
-                   function(x)data.frame(Color = as.character(x)), 
-                   simplify = F), 
-            idcol = "BaseMethod")[order(BaseMethod, Color)]
-
-method_types[order(BaseMethod), Color := method_color_shades$Color]
-
-method_colors <- setNames(object = method_types$Color,
-                          nm = method_types$Method)
-
-# method_types_colors.dt <- 
-#   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
-#         method_types, 
-#         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# multishade_methods <- merge(method_types[, .N, by = BaseMethod], #[N > 1, ], 
+#                             as.data.table(baseMethodColor, keep.rownames = "BaseMethod"),
+#                             by = "BaseMethod")
 # 
-# method_types_colors <- unlist(split(method_types_colors.dt$Color, 
-#                                     method_types_colors.dt$BaseMethod))
-# show_col(method_colors)
+# base_color_shades <- mapply(get_color_shades, 
+#                             setNames(multishade_methods$N - 1,
+#                                      multishade_methods$BaseMethod), 
+#                             multishade_methods$baseMethodColor, 
+#                             USE.NAMES = T)
+# 
+# method_color_shades <- 
+#   rbindlist(sapply(base_color_shades, 
+#                    function(x)data.frame(Color = as.character(x)), 
+#                    simplify = F), 
+#             idcol = "BaseMethod")[order(BaseMethod, Color)]
+# 
+# method_types[order(BaseMethod), Color := method_color_shades$Color]
+# 
+# method_colors <- setNames(object = method_types$Color,
+#                           nm = method_types$Method)
+# 
+# # method_types_colors.dt <- 
+# #   merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
+# #         method_types, 
+# #         by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
+# # 
+# # method_types_colors <- unlist(split(method_types_colors.dt$Color, 
+# #                                     method_types_colors.dt$BaseMethod))
+# # show_col(method_colors)
 ```
 
 ## Colored base text
 
 ```{r, fig.width=7, fig.height=2.5}
-plot_dt <- 
-  melt(copy(method_types)[, c("Base", "Parameters", 
-                              "Test") := tstrsplit(Method, "_")][, .(Method,
-                                                                     Type,
-                                                                     `Base tool` = BaseMethod,
-                                                                     Parameters,
-                                                                     Test)], 
-                id.vars = c("Method", "Type"))
-
-## Fix names
-plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
-plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
-plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
-plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
-plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
-plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
-plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
-plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
-plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
-
-plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
-plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
-plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
-plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
-
-plot_dt[variable == "Parameters", value := toupper(value)]
-
-plot_dt$variable <- factor(plot_dt$variable, 
-                           levels = rev(sort((levels(plot_dt$variable)))), 
-                           ordered = T)
-
-plot_base_method_color_text <-
-  ggplot(plot_dt[variable != "Test"], 
-         aes(x = Method,  
-             y = variable, 
-             color = Method)) +
-  geom_text(aes(label = value), 
-            angle = 90, 
-            hjust = 0.3,  
-            size = 3) +
-  labs(x = NULL, y = NULL) +
-  coord_cartesian(clip = "off") +
-  scale_color_manual(values = method_colors, guide = "none") +
-  facet_grid(rows = vars(variable),
-             scales = "free", 
-             space = "free", 
-             drop = T) +
-  theme_bw() +
-  theme(axis.text.x = element_blank(), 
-        axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
-        text = element_text(size = 10),
-        panel.border = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank(), 
-        panel.background = element_rect(fill = "transparent"),
-        strip.background = element_rect(fill = NA), 
-        strip.text = element_blank(),
-        plot.background = element_blank(),
-        panel.spacing.y = unit(0.05, "lines"),
-        panel.spacing.x = unit(.1, "lines"))
-
-# plot_base_method_color_text
+# plot_dt <- 
+#   melt(copy(method_types)[, c("Base", "Parameters", 
+#                               "Test") := tstrsplit(Method, "_")][, .(Method,
+#                                                                      Type,
+#                                                                      `Base tool` = BaseMethod,
+#                                                                      Parameters,
+#                                                                      Test)], 
+#                 id.vars = c("Method", "Type"))
+# 
+# ## Fix names
+# plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
+# plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
+# plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
+# plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
+# plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
+# plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
+# plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
+# plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
+# plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
+# 
+# plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
+# plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
+# plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
+# plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
+# 
+# plot_dt[variable == "Parameters", value := toupper(value)]
+# 
+# plot_dt$variable <- factor(plot_dt$variable, 
+#                            levels = rev(sort((levels(plot_dt$variable)))), 
+#                            ordered = T)
+# 
+# plot_base_method_color_text <-
+#   ggplot(plot_dt[variable != "Test"], 
+#          aes(x = Method,  
+#              y = variable, 
+#              color = Method)) +
+#   geom_text(aes(label = value), 
+#             angle = 90, 
+#             hjust = 0.3,  
+#             size = 3) +
+#   labs(x = NULL, y = NULL) +
+#   coord_cartesian(clip = "off") +
+#   scale_color_manual(values = method_colors, guide = "none") +
+#   facet_grid(rows = vars(variable),
+#              scales = "free", 
+#              space = "free", 
+#              drop = T) +
+#   theme_bw() +
+#   theme(axis.text.x = element_blank(), 
+#         axis.text.y = element_text(angle = 90, hjust = .5, vjust = .5),
+#         text = element_text(size = 10),
+#         panel.border = element_blank(),
+#         axis.ticks = element_blank(),
+#         panel.grid = element_blank(), 
+#         panel.background = element_rect(fill = "transparent"),
+#         strip.background = element_rect(fill = NA), 
+#         strip.text = element_blank(),
+#         plot.background = element_blank(),
+#         panel.spacing.y = unit(0.05, "lines"),
+#         panel.spacing.x = unit(.1, "lines"))
+# 
+# # plot_base_method_color_text
 ```
 
 ```{r}
-method_labels_table <- 
-  dcast(plot_dt[, .(Method, variable, value)], 
-      Method ~ variable)[, .(Method, 
-                             MethodLabel = paste(`Base tool`, 
-                                                 Parameters, #Test, 
-                                                 sep = "\t"))]
+# method_labels_table <- 
+#   dcast(plot_dt[, .(Method, variable, value)], 
+#       Method ~ variable)[, .(Method, 
+#                              MethodLabel = paste(`Base tool`, 
+#                                                  Parameters, #Test, 
+#                                                  sep = "\t"))]
 ```
 
+```{r}
+source("method_types_and_colors.R")
+```
 
 # Type I error data set
 
@@ -460,7 +466,7 @@ show_dt <-
                          "Method"))[grepl("^TNR", variable), 
                                     `:=`(value = 1 - value)][, `:=`(variable = sub("TNR", "FPR", 
                                                                                    variable))][], 
-        Source_ds + SetSize + Method ~ variable, value.var = "value")
+        Source_ds + SetSize + Method ~ variable, value.var = "value", fill = NA)
 
 show_dt <- merge(method_types, show_dt, by = "Method")
 show_dt$SetSize <- factor(show_dt$SetSize)
@@ -687,7 +693,7 @@ fpr_dendro <-
                      position = "bottom") +
   # scale_y_reverse(name = NULL, expand = c(0, 0.00)) + 
     # scale_y_sqrt() +
-  coord_cartesian(xlim = c(.5, 38.5)) +
+  # coord_cartesian(xlim = c(.5, length(unique(method_types$Method))+.5)) +
   labs(x = NULL, y = NULL) +
   theme_dendro() +
   theme(axis.text.x = element_text(color = method_colors[label(fpr_dendro_ddata)$label],
@@ -947,43 +953,44 @@ bottom_box <-
 
 fpr_dendro_wrap_plot <- 
   wrap_plots(wrap_plots(fpr_dendro +
-                            # scale_x_discrete(limits = method_order) + 
-                            theme_void() + 
-                            theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
+                          scale_x_discrete(limits = method_order) +
+                          theme_void() + 
+                          theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
                         plot_base_method_type_tiles +
-                            scale_x_discrete(limits = method_order) + 
-                            theme_void() + 
+                          scale_x_discrete(limits = method_order) + 
+                          theme_void() + 
                           theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
                         ncol = 1, heights = c(1, .25),
                         guides = "collect") & 
                theme(legend.position = "top"), 
              fpr_dendro_ordered_plot +
-                 scale_x_discrete(limits = method_order) + 
-                 theme(plot.margin = margin(0, 0, 0, 0, "lines"),
-                       axis.ticks.x = element_blank(),
-                       panel.grid.minor.y = element_blank()), 
+               scale_x_discrete(limits = method_order) + 
+               theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+                     axis.ticks.x = element_blank(),
+                     panel.grid.minor.y = element_blank()), 
              plot_stn_clustered  +
-                 scale_x_discrete(limits = method_order) + 
-                 theme(plot.margin = margin(0, 0, 0, 0, "lines"),
-                       axis.text.x = element_blank()),
+               scale_x_discrete(limits = method_order) + 
+               theme(plot.margin = margin(0, 0, 0, 0, "lines"),
+                     axis.text.x = element_blank()),
              # colored_method_text + theme_void() + 
              #     theme(plot.margin = margin(0, 0, 0, 0, "lines")), 
              bottom_box +
-                 scale_x_discrete(limits = method_order),
+               scale_x_discrete(limits = method_order),
              ncol = 1, 
              heights = c(1.5, 2, 7.5, 4)) &
+  scale_x_discrete(limits = method_order) &
   # theme(text = element_text(size = 10))
-    theme(plot.margin = margin(0, .5, 0, .5, "lines"),
-          legend.key.size = unit(.7, "lines"),
-          legend.box.margin = margin(0, 0, 0.5, 0, "lines"),
-          legend.box.spacing = unit(0, "lines"),
-          legend.margin = margin(0, 0, 0, 0, "lines"),
-          legend.spacing.y = unit(.1, "lines"),
-          panel.spacing.x = unit(.05, "lines"),
-          panel.grid.minor = element_blank(),
-          text = element_text(size = 10), 
-          plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
-  
+  theme(plot.margin = margin(0, .5, 0, .5, "lines"),
+        legend.key.size = unit(.7, "lines"),
+        legend.box.margin = margin(0, 0, 0.5, 0, "lines"),
+        legend.box.spacing = unit(0, "lines"),
+        legend.margin = margin(0, 0, 0, 0, "lines"),
+        legend.spacing.y = unit(.1, "lines"),
+        panel.spacing.x = unit(.05, "lines"),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 10), 
+        plot.tag = element_text(hjust = -1, vjust = -1, size = 12))
+
 
 fpr_dendro_wrap_plot
 ```
@@ -1184,112 +1191,6 @@ datatable(show_dt,
           rownames = F, 
           filter = "top") %>%
   formatRound(gsub("_", " ", value_cols), 3)
-```
-
-### Number of detections {.tabset}
-
-```{r}
-rejections_padj_pattern <- "rejections_0\\.[015]{2}_padj$"
-
-idvars <- c("SetSize", "Method", "Source_ds", "Dataset")
-rejections <- 
-  melt(sbAssay_dt[, c(idvars, 
-                      grep(rejections_pval_pattern, 
-                           colnames(sbAssay_dt), 
-                           value = T)), 
-                  with = F], 
-       id.vars = idvars)
-
-rejections[, Alpha := sub("rejections_", "", variable), by = variable]
-
-# n_points <- rejections[value > 0, .N, by = .(SetSize, Method, Alpha)]
-```
-
-```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
-plot_dt <- rejections
-
-method_order <-method_types[order(toupper(BaseMethod), toupper(Method)), Method]
-```
-
-#### N03
-
-```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
-wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
-                            SetSize == "N03" &
-                            value > 0], 
-                  aes(x = Method, y = value, color = Method)) + 
-             geom_boxplot(outlier.size = .5, varwidth = T) +
-             facet_grid(cols = vars(SetSize), 
-                        rows = vars(Source_ds),
-                        scales = "free_y") +
-             scale_color_manual(values = method_colors, guide = "none") +
-             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
-             theme_bw() +
-             theme(axis.text.x = element_blank(),
-                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-                   plot.margin = margin(0, 0, 0, 0),
-                   panel.grid.minor = element_blank(), 
-                   panel.grid.major.x = element_blank()),
-           plot_base_method_color_text +
-             theme(plot.margin = margin(0, 0, 0, 0)), 
-           ncol = 1, guides = "collect", heights = c(2, 1)) &
-  scale_x_discrete(limits = method_order) & 
-  theme(panel.spacing.y = unit(0.01, "lines"))
-
-```
-
-#### N05
-
-```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
-wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
-                            SetSize == "N05" &
-                            value > 0], 
-                  aes(x = Method, y = value, color = Method)) + 
-             geom_boxplot(outlier.size = .5, varwidth = T) +
-             facet_grid(cols = vars(SetSize), 
-                        rows = vars(Source_ds),
-                        scales = "free_y") +
-             scale_color_manual(values = method_colors, guide = "none") +
-             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
-             theme_bw() +
-             theme(axis.text.x = element_blank(),
-                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-                   plot.margin = margin(0, 0, 0, 0),
-                   panel.grid.minor = element_blank(), 
-                   panel.grid.major.x = element_blank()),
-           plot_base_method_color_text +
-             theme(plot.margin = margin(0, 0, 0, 0)), 
-           ncol = 1, guides = "collect", heights = c(2, 1)) &
-  scale_x_discrete(limits = method_order) & 
-  theme(panel.spacing.y = unit(0.01, "lines"))
-
-```
-
-#### N10
-
-```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
-wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
-                            SetSize == "N10" &
-                            value > 0], 
-                  aes(x = Method, y = value, color = Method)) + 
-             geom_boxplot(outlier.size = .5, varwidth = T) +
-             facet_grid(cols = vars(SetSize), 
-                        rows = vars(Source_ds),
-                        scales = "free_y") +
-             scale_color_manual(values = method_colors, guide = "none") +
-             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
-             theme_bw() +
-             theme(axis.text.x = element_blank(),
-                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-                   plot.margin = margin(0, 0, 0, 0),
-                   panel.grid.minor = element_blank(), 
-                   panel.grid.major.x = element_blank()),
-           plot_base_method_color_text +
-             theme(plot.margin = margin(0, 0, 0, 0)), 
-           ncol = 1, guides = "collect", heights = c(2, 1)) &
-  scale_x_discrete(limits = method_order) & 
-  theme(panel.spacing.y = unit(0.01, "lines"))
-
 ```
 
 ### FDR {.tabset}
@@ -1551,7 +1452,7 @@ fdr_dendro <-
                      labels = label(fdr_dendro_ddata)$label, 
                      expand = c(0, 0),
                      position = "bottom") +
-  coord_cartesian(xlim = c(.5, 38.5)) +
+  # coord_cartesian(xlim = c(.5, length(unique(method_types$Method))+.5)) +
   labs(x = NULL, y = NULL) +
   theme_dendro() +
   # theme(axis.text.x = element_text(color = method_colors[label(fdr_dendro_ddata)$label], 
@@ -1878,7 +1779,8 @@ wrap_plots(plot_stn +
            plot_base_method_color_text +
              # scale_y_discrete(position = "right") +
              theme(plot.background = element_blank()), 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2)) & 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 #### StN + bars N03 Zoomed scale
@@ -1952,7 +1854,8 @@ wrap_plots(plot_stn_boxes +
                      # axis.ticks.x = element_blank(), 
                      plot.margin = unit(c(0, 0, 0, 0), "lines")), 
            plot_base_method_color_text, 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2))& 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 #### StN + bars N05
@@ -2032,7 +1935,8 @@ wrap_plots(plot_stn +
            plot_base_method_color_text +
              # scale_y_discrete(position = "right") +
              theme(plot.background = element_blank()), 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2)) & 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 #### StN + bars N05 Zoomed scale
@@ -2106,7 +2010,8 @@ wrap_plots(plot_stn_boxes +
                      # axis.ticks.x = element_blank(), 
                      plot.margin = unit(c(0, 0, 0, 0), "lines")), 
            plot_base_method_color_text, 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2)) & 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 #### StN + bars N10
@@ -2184,7 +2089,8 @@ wrap_plots(plot_stn +
            plot_base_method_color_text +
              # scale_y_discrete(position = "right") +
              theme(plot.background = element_blank()), 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2)) & 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 #### StN + bars N10 Zoomed scale
@@ -2258,7 +2164,8 @@ wrap_plots(plot_stn_boxes +
                      # axis.ticks.x = element_blank(), 
                      plot.margin = unit(c(0, 0, 0, 0), "lines")), 
            plot_base_method_color_text, 
-           ncol = 1, heights = c(4, 2))
+           ncol = 1, heights = c(4, 2)) & 
+  scale_x_discrete(limits = method_order_alf)
 ```
 
 
@@ -2694,7 +2601,8 @@ ggplot(plot_dt,
                                           reverse = T)) +
   facet_wrap(~ MethodLabel, #Method, 
              scales = "fixed", ncol = 10) +
-  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1),
+                     limits = c(0, 1)) +
   theme_bw() +
   theme(legend.position = "top", #c(.9, .1), 
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
@@ -2968,7 +2876,8 @@ ggplot(plot_dt,
                        guide = "none") +
     facet_wrap(~ MethodLabel, #Method, 
                scales = "fixed", ncol = 10) +
-    scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1), 
+                       limits = c(0, 1)) +
     theme_bw() +
     theme(legend.position = c(.9, .1), 
           axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
@@ -3069,8 +2978,7 @@ wrap_plots(fdr_dendro +
 
 # Running times {.tabset}
 
-## Set size
-
+## Plot
 
 ```{r, fig.width=14.5, fig.height=5.5}
 plot_dt <- sbAssay_dt[, Seconds := ifelse(grepl("_ZW_", Method), Runtime.2, 
@@ -3086,7 +2994,10 @@ method_order <- plot_dt[order(MeanSeconds), unique(Method)]
 plot_dt$Method <- factor(plot_dt$Method, 
                          levels = method_order, 
                          ordered = T)
+```
 
+
+```{r, fig.width=14.5, fig.height=5.5}
 cputime_plot <-
   ggplot(plot_dt, 
          aes(x = Method, y = MeanSeconds, color = Method)) +
@@ -3120,6 +3031,200 @@ wrap_plots(cputime_plot +
   scale_x_discrete(limits = method_order)
 ```
 
+#### Table
+
+```{r}
+datatable(plot_dt, filter = "top", rownames = F)
+```
+
+### Number of detections {.tabset}
+
+```{r}
+rejections_padj_pattern <- "rejections_0\\.[015]{2}_padj$"
+
+idvars <- c("SetSize", "Method", "Source_ds", "Dataset")
+rejections <- 
+  melt(sbAssay_dt[, c(idvars, 
+                      grep(rejections_pval_pattern, 
+                           colnames(sbAssay_dt), 
+                           value = T)), 
+                  with = F], 
+       id.vars = idvars)
+
+rejections[, Alpha := sub("rejections_", "", variable), by = variable]
+
+# n_points <- rejections[value > 0, .N, by = .(SetSize, Method, Alpha)]
+```
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+plot_dt <- rejections
+
+method_order <-method_types[order(toupper(BaseMethod), toupper(Method)), Method]
+```
+
+#### N03
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N03" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
+```
+
+#### N05
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N05" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
+```
+
+#### N10
+
+```{r, fig.width=6.692, fig.height=5.5, warning=FALSE}
+wrap_plots(ggplot(plot_dt[Alpha == "0.05" & 
+                            SetSize == "N10" &
+                            value > 0], 
+                  aes(x = Method, y = value, color = Method)) + 
+             geom_boxplot(outlier.size = .5, varwidth = T) +
+             facet_grid(cols = vars(SetSize), 
+                        rows = vars(Source_ds),
+                        scales = "free_y") +
+             scale_color_manual(values = method_colors, guide = "none") +
+             labs(x = NULL, y = "Number of circRNAs with padj \u2264 0.05") +
+             theme_bw() +
+             theme(axis.text.x = element_blank(),
+                   #axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+                   plot.margin = margin(0, 0, 0, 0),
+                   panel.grid.minor = element_blank(), 
+                   panel.grid.major.x = element_blank()),
+           plot_base_method_color_text +
+             theme(plot.margin = margin(0, 0, 0, 0)), 
+           ncol = 1, guides = "collect", heights = c(2, 1)) &
+  scale_x_discrete(limits = method_order) & 
+  theme(panel.spacing.y = unit(0.01, "lines"))
+
+```
+
+### Rejections vs performance
+
+```{r}
+patterns <- paste0(c(rejections_padj_pattern, 
+                   fdr_pattern,
+                   tpr_pattern), collapse = "|")
+
+idvars <- c("SetSize", "Method", "Source_ds", "Dataset")
+plot_dt <- 
+  melt(sbAssay_dt[, c(idvars, 
+                      grep(patterns, 
+                           colnames(sbAssay_dt), 
+                           value = T)), 
+                  with = F], 
+       id.vars = idvars)
+
+plot_dt[, Alpha := sub("[^_]+_([^_]+)_.*", "\\1", variable), by = variable]
+plot_dt[, Measure := sub("([^_]+)_.*", "\\1", variable), by = variable]
+
+plot_dt <- 
+  merge(dcast(plot_dt[Measure == "rejections"], 
+              formula = SetSize + Method + Source_ds + Dataset + Alpha ~ Measure, 
+              value.var = "value"),
+        plot_dt[Measure != "rejections", c(idvars, "Alpha", "Measure", "value"), with = F],
+        by = c(idvars, "Alpha"))
+```
+
+```{r}
+ggplot(plot_dt[Alpha == "0.05"], aes(x = rejections, y = value, color = Source_ds)) +
+  # geom_smooth(method = "glm") +
+  geom_point(size = .25) +
+  facet_grid(cols = vars(Measure), rows = vars(SetSize)) +
+  scale_color_tableau(direction = -1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_x_log10() +
+  # scale_x_sqrt() +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank())
+```
+
+```{r}
+ggplot(plot_dt, aes(x = rejections, y = value, color = Source_ds)) +
+  # geom_smooth(method = "glm", aes(group = paste(Measure, Alpha)), 
+  #             color = "black", 
+  #             linetype = "dashed") +
+  geom_point(size = .25, alpha = .2) +
+  facet_grid(rows = vars(Measure, Alpha), 
+             cols = vars(SetSize), scales = "free_x") +
+  scale_color_tableau(direction = -1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  # scale_x_continuous(limits = c(0, max(plot_dt$rejections, na.rm = T)))
+  scale_x_log10()
+```
+
+```{r}
+ggplot(plot_dt[Alpha == "0.05" & SetSize == "N05"], 
+       aes(x = rejections, y = value, color = Measure)) +
+  geom_smooth(method = "glm") +
+  geom_point(size = .25) +
+  facet_wrap(facets = ~ Method, ncol = 4, scales = "free_x") +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_color_calc() +
+  # scale_x_log10() +
+  # scale_x_sqrt() +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), 
+        legend.position = c(.9, 0))
+```
+
+```{r}
+ggplot(plot_dt[Alpha == "0.05" & SetSize == "N05"], 
+       aes(x = rejections, y = value, color = Method)) +
+  geom_smooth(method = "glm", se = F) +
+  geom_point(size = .25) +
+  facet_wrap(facets = ~ Measure, ncol = 1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_color_manual(values = method_colors) +
+  # scale_x_log10() +
+  # scale_x_sqrt() +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank())
+```
 
 # Session info
 

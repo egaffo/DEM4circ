@@ -1,0 +1,388 @@
+---
+title: "Benchmark De methods"
+author: "Enrico Gaffo"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+params:
+  outdir: "benchmark_results_2/DM1"
+  inputData: "filtered_simdata/DM1/datasetList.qs"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(SummarizedBenchmark)
+library(magrittr)
+# library(plotROC)
+library(data.table)
+library(qs)
+library(DT)
+
+library(BiocParallel)
+library(batchtools)
+
+set.seed(12345)
+```
+
+```{r}
+source("../utils/diff_exp_funcs.R")
+```
+
+```{r}
+## set the output directory
+# outdir <- "benchmark_results"
+outdir <- params$outdir
+dir.create(path = outdir, recursive = T, showWarnings = F)
+```
+
+```{r}
+# nWorkers <- floor(multicoreWorkers() / 2)
+nWorkers <- multicoreWorkers() - 8
+
+## load simulated preprocessed data
+# inputData <- "./preprocessed_datasets/datasetList.qs"
+inputData <- params$inputData
+datasetList <- qread(file = inputData, nthreads = nWorkers)
+datasetList <- datasetList[grepl("bulk", names(datasetList))]
+```
+
+```{r}
+## separate DE and not-DE simulations
+# datasetList <- datasetList[!grepl("mock", names(datasetList))]
+## names(de_ds_list) <- paste0(names(de_ds_list), "_de")
+# not_de_ds_list <- sim_ds_list[grepl("mock", names(sim_ds_list))]
+```
+
+# Prepare dataset and input parameters
+
+```{r}
+# subsetIdx <- c(1:3, 31:33, 61:63, # { bulk 3, 5, 10 } x 3
+#                91:93, 121:123, 151:153) # { sice 3, 5, 10 } x 3
+# subsetIdx <- c(1:2, 31:32, 61:62, 91:92, 121:122, 151:152)
+# subsetIdx <- 1:length(datasetList) # all
+subsetIdx <- which(grepl(pattern = "_bulk_", names(datasetList))) ## do not consider "sice" simulations
+datasetList <- datasetList[subsetIdx]
+
+# countData <- datasetList$N03_bulk_de_01$cntdat
+# group <- datasetList$N03_bulk_de_01$coldat$condition
+```
+
+```{r}
+## set scheduler for cluster computing
+zwcpus <- 1 #8
+
+walltime <-  86400 # 24h; 14400 4h max time
+minmem <- 2048 # 4096 = 4Gb, 2048 = 2GByte, 8192 = 8Gb #Minimum memory required per allocated CPU.
+# bpparam <- BatchtoolsParam(workers = length(datasetList),
+#                            saveregistry = F,
+#                            cluster = "slurm",
+#                            resources = list(ncpus = zwcpus,
+#                                             walltime = walltime,
+#                                             memory = minmem)
+# )
+
+## Multithread, single machine
+bpparam <- MulticoreParam(nWorkers)
+# zwcpus <- 1
+
+## set max runtime allowed (set a lower value than the scheduler)
+# bptimeout(bpparam) <- walltime - 10
+```
+
+## Compute weigths
+
+```{r prepare_datasets}
+## prepare dataset and input parameters
+datasetList <- 
+    bplapply(datasetList, 
+             function(x, compute_weights, zwcpus) {
+                 
+                 inner_bpparam <- BiocParallel::MulticoreParam(workers = zwcpus)
+                 
+                 ## keep track of runtime spent computing weights with ZinbWave; 
+                 ## it will be sum up to the running time of methods using weights
+                 tictoc::tic(msg = "Computing weights")
+                 # weights <- compute_weights(countdata = x$cntdat,
+                 #                            coldat = x$coldat[[1]],
+                 #                            BPPARAM = inner_bpparam)
+                 weights = NULL ## not relevant for some methods
+                 time_weights <- tictoc::toc(log = F, quiet = T)
+                 
+                 x$weights <- weights
+                 x$time_weights <- setNames(rep(time_weights$toc - time_weights$tic, nrow(x$cntdat)), NULL)
+                 x
+                 
+             }, 
+             
+             compute_weights = compute_weights,
+             zwcpus = zwcpus,
+             BPPARAM = bpparam)
+```
+
+```{r save_datasets}
+# ## save the processed data sets
+# inputData <- "datasetList.qs"
+# qsave(x = datasetList, 
+#       file = inputData, 
+#       nthreads = multicoreWorkers(), 
+#       preset = "fast")
+```
+
+# Bench design
+
+```{r}
+bd <- BenchDesign()
+```
+
+## Add memthods to the bench
+
+```{r}
+## add memthods to the bench
+bd <- bd %>%
+  addMethod(label = "hytest_TMM_HG",
+            func = hytest_run,
+            post = list(pv = hytest_pv,
+                        adj_pv = hytest_apv,
+                        lfc = hytest_lfc,
+                        runtime = hytest_time),
+            meta = list(pkg_name = "hy.test",
+                        pkg_vers = "v0.0.1"),
+            params = rlang::quos(countData = cntdat,
+                                 group = coldat$condition))
+# addMethod(label = "scCODE_Dt_MT",
+#           func = scCODE_run,
+#           post = list(pv = scCODE_pv,
+#                       adj_pv = scCODE_apv,
+#                       lfc = scCODE_lfc,
+#                       runtime = scCODE_time),
+#           meta = list(pkg_name = "scCODE",
+#                       pkg_vers = as.character(packageVersion("scCODE"))),
+#           params = rlang::quos(countData = cntdat,
+#                                group = coldat$condition)) %>%
+# addMethod(label = "scDEA_Dt_MT",
+#           func = scDEA_run,
+#           post = list(pv = scDEA_pv,
+#                       adj_pv = scDEA_apv,
+#                       lfc = scDEA_lfc,
+#                       runtime = scDEA_time),
+#           meta = list(pkg_name = "scDEA",
+#                       pkg_vers = as.character(packageVersion("scDEA"))),
+#           params = rlang::quos(countData = cntdat,
+#                                group = coldat$condition))
+
+bd
+```
+
+```{r}
+# printMethods(bd)
+```
+
+## Build bench list
+
+```{r build_benches, message=FALSE}
+## override BPPARAM
+parallel_methods <- 1
+# bpparam$resources$ncpus <- parallel_methods
+walltime <- 3600 ## let max 1h computing time to each method
+
+# BiocParallel::bptimeout(bpparam) <- 180 # 3min
+# datasetList <- datasetList[c(1:2, 31:32, 61:62,
+#              91:92, 121:122, 151:152)]
+# bpparam <- BiocParallel::SerialParam()
+
+sbL <- 
+  bplapply(datasetList, 
+           function(x, bd, parallel_methods, walltime = 1800) { 
+             
+             # inner_bpparam <- BiocParallel::MulticoreParam(parallel_methods)
+             # BiocParallel::bptimeout(inner_bpparam) <- walltime
+             inner_bpparam <- BiocParallel::SerialParam()
+             
+             SummarizedBenchmark::buildBench(bd, data = x, 
+                                             truthCols = c(pv = "status",
+                                                           adj_pv = "status", 
+                                                           lfc = "status", # LFC(DEC) >= 0.5
+                                                           runtime = "time_weights"), 
+                                             keepData = T,
+                                             parallel = T, #F do not run in parallel 
+                                             BPPARAM = inner_bpparam) # this is unused if parallel =F
+           }, 
+           bd = bd,
+           parallel_methods = parallel_methods,
+           walltime = walltime,
+           BPPARAM = bpparam)
+# sbL
+```
+
+```{r}
+## error handling
+show_dt <- 
+  dcast(melt(rbindlist(lapply(sbL, 
+                              function(x)data.table(as.data.frame(simplify2array(metadata(x)$sessions[[1]]$results)), 
+                                                    keep.rownames = "Assay")), 
+                       idcol = "DS"), 
+             id.vars = c("DS", "Assay"), 
+             variable.name = "Method"), 
+        formula = DS + Method ~ Assay)
+
+show_dt$DS <- factor(show_dt$DS)
+show_dt$Method <- factor(show_dt$Method)
+
+datatable(show_dt[adj_pv != "success" | 
+                    lfc != "success" | 
+                    pv != "success" | 
+                    runtime != "success"], 
+          caption = "Methods that failed",
+          filter = "top", rownames = F)
+```
+
+```{r}
+## save the summarizedBenchmark builds
+sumBenchs_qs <- file.path(outdir, "sumBenchs.qs")
+qsave(x = sbL, 
+      file = sumBenchs_qs, 
+      nthreads = multicoreWorkers(), 
+      preset = "fast")
+```
+
+The built SummarizedBenchmark objects have been save into <a href="`r sumBenchs_qs`">`r sumBenchs_qs`</a>.  
+
+# Performance
+
+```{r}
+# availableMetrics()
+```
+
+## Add performance 
+
+```{r}
+#' Adds performance metrics to a SummarizedBenchmark object
+#' param x the SummarizedBenchmark object
+#' returns a SummarizedBenchmark with the peformance metrics setted
+add_performance_metrics <- 
+  function(x) {
+    
+    ## Notes:
+    ## precision (PPV) = 1 - FDR
+    ## recall = TPR
+    ## specificity = TNR  
+    ## FPR = 1 - TNR
+    ## FNR = 1 - TPR
+    ## F1 = 2 * ( (PPV * TPR) / (PPV + TPR) )
+    
+    ## add the metrics on the P-values
+    x <- SummarizedBenchmark::addPerformanceMetric(x, 
+                                                   evalMetric = c("rejections", "TPR", "TNR", "FDR"), #, "FNR"
+                                                   assay = "pv")
+    
+    ## add the metrics on the adjusted P-values
+    x <- SummarizedBenchmark::addPerformanceMetric(x, 
+                                                   evalMetric = c("rejections", "TPR", "TNR", "FDR"), #, "FNR"
+                                                   assay = "adj_pv")
+    
+    ## add the metrics on the fold changes: TPR
+    x <- SummarizedBenchmark::addPerformanceMetric(object = x,
+                                                   assay = "lfc",
+                                                   evalMetric = "LFC_TPR",
+                                                   evalFunction = function(query, truth, lfc_thr = 0.5) {
+                                                     ## TPR = TP / (TP + FN)
+                                                     is_lfc_larger  <- query >= lfc_thr
+                                                     is_lfc_larger[is.na(is_lfc_larger)] <- F
+                                                     TP <- sum(is_lfc_larger & truth == 1)
+                                                     TP / sum(truth == 1)
+                                                   })
+    
+    ## add the metrics on the fold changes: TNR
+    # x <- SummarizedBenchmark::addPerformanceMetric(object = x,
+    #                                                assay = "lfc",
+    #                                                evalMetric = "LFC_TNR", 
+    #                                                evalFunction = function(query, truth, lfc_thr = 0.5) {
+    #                                                  ## TNR = TN / N, with N = TN + FP
+    #                                                  is_lfc_lower  <- query < lfc_thr
+    #                                                  is_lfc_lower[is.na(is_lfc_lower)] <- T
+    #                                                  TN <- sum(is_lfc_lower & truth == 0)
+    #                                                  TN / sum(truth == 0)
+    #                                                })
+    # 
+    # ## add the metrics on the fold changes: FDR
+    # x <- SummarizedBenchmark::addPerformanceMetric(object = x,
+    #                                                assay = "lfc",
+    #                                                evalMetric = "LFC_FDR", 
+    #                                                evalFunction = function(query, truth, lfc_thr = 0.5) {
+    #                                                  ## FDR = FP / (FP + TP)
+    #                                                  is_lfc_larger  <- query >= lfc_thr
+    #                                                  is_lfc_larger[is.na(is_lfc_larger)] <- F
+    #                                                  FP <- sum(is_lfc_larger & truth == 0)
+    #                                                  TP <- sum(is_lfc_larger & truth == 1)
+    #                                                  FP / (FP + TP)
+    #                                                })
+    
+    ## add the Runtime metric
+    x <- SummarizedBenchmark::addPerformanceMetric(object = x,
+                                                   assay = "runtime",
+                                                   evalMetric = "Runtime",
+                                                   evalFunction = function(query, truth, add_weight_time = FALSE) {
+                                                     ifelse(add_weight_time, query[1] + truth[1], query[1])
+                                                   })
+    
+    ## return the updated SummarizedBenchmark object
+    x
+  }
+```
+
+```{r add_performance_metrics}
+## add the performance metrics to the list of bechDesign
+# bpparam$resources$ncpus <- 1
+
+sbL <- 
+  bplapply(sbL, 
+           add_performance_metrics,
+           BPPARAM = bpparam)
+# BPPARAM = BiocParallel::MulticoreParam(nWorkers))
+```
+
+## Estimate performance
+
+```{r estimate_performance}
+alpha_targets <- c(0.01, 0.05, 0.1) 
+add_weights <- c(FALSE, TRUE)
+
+sbL <- bplapply(sbL, function(x, alphas, add_weights) {
+    SummarizedBenchmark::estimatePerformanceMetrics(x, 
+                                                    rerun = T,
+                                                    alpha = alphas, 
+                                                    add_weight_time = add_weights,
+                                                    addColData = T)},
+    alphas = alpha_targets,
+    add_weights = add_weights,
+    # BPPARAM = BiocParallel::MulticoreParam(nWorkers))
+    BPPARAM = bpparam)
+
+# View(rbindlist(lapply(sbL,
+#                       function(x)data.table(as.data.frame(colData(x)),
+#                                             keep.rownames = "Met")),
+#                idcol = "DS"))
+```
+
+```{r save_performance_results}
+## save the summarizedBenchmark estimated performance
+sumBench_perf_metrics_qs <- file.path(outdir, "sumBench_perf_metrics.qs")
+qsave(x = sbL, 
+      file = sumBench_perf_metrics_qs, 
+      nthreads = multicoreWorkers(), 
+      preset = "fast")
+```
+
+The benchmark results have been save into <a href="`r sumBench_perf_metrics_qs`">`r sumBench_perf_metrics_qs`</a>.  
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+

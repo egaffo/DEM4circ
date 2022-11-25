@@ -1694,3 +1694,73 @@ scDEA_lfc <- function(x) {
 
 scDEA_time <- function(x) { rep(as.numeric(x$runtime), length(x$res$pval)) }
 
+hytest_run <- function(countData, group) {
+  # download.file(url = "https://github.com/gianluca-sottile/A-Novel-Statistical-Test-For-Differential-Expression-Analysis/raw/main/0.hy.test.R",
+  #               destfile = "hy_test.R")
+  #https://github.com/gianluca-sottile/A-Novel-Statistical-Test-For-Differential-Expression-Analysis
+
+  ##### hy-test #####
+  source("../utils/hy_test.R")
+  # n <- ncol(dati.geni.log) / 2
+  # tissue <- rep(1:2, each = n)
+
+  set.seed(12345)
+  tictoc::tic()
+
+  dge <- edgeR::DGEList(counts = countData, group = group)
+  dge <- edgeR::calcNormFactors(dge, method = "TMM")
+  lcpms <- edgeR::cpm(dge, log = T, prior.count = 1)
+
+  dati.geni.log <- lcpms
+  tissue <- group
+
+  dati.geni.log.tolist <- as.list(data.frame(t(dati.geni.log)))
+
+  # out <- pbmclapply(dati.geni.log.tolist,
+  #                   function(gene, tissue) hy.test(gene ~ tissue, data = data.frame(gene, tissue)),
+  #                   tissue = tissue, mc.cores = 4L)
+  # out <- BiocParallel::bplapply(dati.geni.log.tolist,
+  #               function(gene, tissue) hy.test(gene ~ tissue,
+  #                                              data = data.frame(gene, tissue)),
+  #               tissue = tissue,
+  #               BPPARAM = BiocParallel::MulticoreParam(BiocParallel::multicoreWorkers()))
+  out <- lapply(dati.geni.log.tolist,
+                function(gene, tissue) hy.test(gene ~ tissue,
+                                               data = data.frame(gene, tissue)),
+                tissue = tissue)
+
+  pvals <- sapply(out, function(x) x$p.value)
+
+  res <- data.frame(pval = pvals,
+                    padj = p.adjust(pvals, method = "BH"),
+                    row.names = rownames(countData))
+
+  ## mock LFC
+  lfc <- setNames(rep_len(x = 0,
+                          length.out = nrow(countData)),
+                  rownames(countData))
+
+  runtime <- tictoc::toc(log = F, quiet = T)
+
+  list(res = res,
+       lfc = lfc,
+       runtime = runtime$toc - runtime$tic)
+}
+
+hytest_pv <- function(x) {
+  res <- x$res$pval
+  # res[is.na(res)] <- 1
+  res
+}
+
+hytest_apv <- function(x) {
+  res <- x$res$padj
+  # res[is.na(res)] <- 1
+  res
+}
+
+hytest_lfc <- function(x) {
+  x$lfc
+}
+
+hytest_time <- function(x) { rep(as.numeric(x$runtime), length(x$res$pval)) }

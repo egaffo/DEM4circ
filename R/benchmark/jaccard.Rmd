@@ -44,178 +44,10 @@ knitr::opts_chunk$set(echo = TRUE,
 # Method names
 
 ```{r}
-method_types <- 
-  data.table(Method = c("circMeta_Dt_PZT", "circMeta_Lc_PZT", "DESeq2_BP_WaT", 
-                        "DESeq2_Dt_LRT", "DESeq2_Dt_WaT", "DESeq2_GP_LRT", 
-                        "DESeq2_Lc_LRT", "DESeq2_Sc_LRT", "DESeq2_Zi_LRT", 
-                        "DESeq2_ZW_LRT", "DEsingle_Dt_LRT", "edgeR_Dt_LRT", 
-                        "edgeR_rbst_LRT", "edgeR_rbst_QFT", "edgeR_rbst50df_LRT", 
-                        "edgeR_rbstEdf_LRT", "edgeR_rbstTMMswp_LRT", "edgeR_ZW_LRT", 
-                        "limma_St_Vst", "lncDIFF_Dt_LRT", "MAST_CPM_LRT", 
-                        "metagenomeSeq_Dt_EBT", "monocle_Dt_LRT", "NBID_Dt_LRT", 
-                        "NBID_Sc_LRT", "NOISeqBIO_TMM_LRT", "PoissonSeq_Dt_TT", 
-                        "ROTScpm_Dt_TLT", "SAMseq_Dt_TT", "seurat_Bim_LRT", 
-                        "seurat_Dt_WLX", "voom_Dt_MFT", "voom_LF_MFT", 
-                        "voom_Qn_MFT", "voom_Rb_MFT", "voom_Sp_MFT", 
-                        "voom_ZW_MFT", "wilcoxon_TMM_WLX"),
-             Type = c("Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Bulk RNA-seq", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Single cell / metagenome", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome", 
-                      "Single cell / metagenome", "Bulk RNA-seq", "Single cell / metagenome",
-                      "Bulk RNA-seq", "Bulk RNA-seq", "Bulk RNA-seq", 
-                      "Single cell / metagenome", "Single cell / metagenome"),
-             BaseMethod = c("circMeta", "circMeta", "DESeq2", 
-                            "DESeq2", "DESeq2", "glmGamPoi", 
-                            "DESeq2", "DESeq2", "DESeq2", 
-                            "DESeq2", "DEsingle", "edgeR", 
-                            "edgeR", "edgeR", "edgeR", 
-                            "edgeR", "edgeR", "edgeR", 
-                            "limma", "lncDIFF", "MAST", 
-                            "metagenomeSeq", "monocle", "NBID", 
-                            "NBID", "NOISeqBIO", "PoissonSeq", 
-                            "ROTS", "SAMseq", "Seurat", 
-                            "Seurat", "Voom", "Voom", 
-                            "Voom", "Voom", "Voom", 
-                            "Voom", "Wilcoxon"))
-```
-
-```{r}
-#' A function to mimic the ggplot default palette
-gg_color_hue <- function(n) {
-  hues = seq(15, 375, length = n + 1)
-  hcl(h = hues, l = 65, c = 100)[1:n]
-}
-
-method_colors <- setNames(object = gg_color_hue(length(method_types$Method)), 
-                          nm = sort(method_types$Method))
-
-method_types_colors.dt <- 
-  merge(data.table(data.frame(Color = method_colors), keep.rownames = "Method"), 
-        method_types, 
-        by = "Method")[, .(Color = head(Color, 1)), by = BaseMethod]
-
-method_types_colors <- unlist(split(method_types_colors.dt$Color, 
-                                    method_types_colors.dt$BaseMethod))
-```
-
-```{r, fig.width=2.5, fig.height=6.69}
-plot_dt <- 
-  melt(copy(method_types)[, c("Base", "Parameters", 
-                              "Test") := tstrsplit(Method, "_")][, .(Method,
-                                                                     Type,
-                                                                     `Base tool` = BaseMethod,
-                                                                     Parameters,
-                                                                     Test)], 
-                id.vars = c("Method", "Type"))
-
-## Fix names
-plot_dt[value == "metagenomeSeq", value := "metagenSeq"]
-plot_dt[Method == "wilcoxon_TMM_WLX" & variable == "Parameters", value := "RC"]
-plot_dt[Method == "edgeR_rbstTMMswp_LRT" & variable == "Parameters", value := "Twsp"]
-plot_dt[Method == "edgeR_rbst50df_LRT" & variable == "Parameters", value := "50DF"]
-plot_dt[Method == "edgeR_rbstEdf_LRT" & variable == "Parameters", value := "EDF"]
-plot_dt[Method == "DESeq2_GP_LRT" & variable == "Parameters", value := "Dt"]
-plot_dt[Method == "voom_Rb_MFT" & variable == "Parameters", value := "RBST"]
-plot_dt[Method == "limma_St_Vst" & variable == "Parameters", value := "VST"]
-plot_dt[Method == "limma_St_Vst" & variable == "Test", value := "MFT"]
-
-plot_dt[Method == "DESeq2_Dt_LRT" & variable == "Parameters", value := "LRT"]
-plot_dt[Method == "DESeq2_Dt_WaT" & variable == "Parameters", value := "WAT"]
-plot_dt[Method == "edgeR_rbst_QFT" & variable == "Parameters", value := "QFT"]
-plot_dt[Method == "seurat_Dt_WLX" & variable == "Parameters", value := "WLX"]
-
-plot_dt[variable == "Parameters", value := toupper(value)]
-
-plot_dt$variable <- factor(plot_dt$variable, 
-                           levels = rev(sort((levels(plot_dt$variable)))), 
-                           ordered = T)
-
-plot_base_method_color_text <-
-  ggplot(plot_dt[variable != "Test"], 
-         aes(y = Method, 
-             x = variable, 
-             color = Method)) +
-  geom_text(aes(label = value), 
-            size = 3) +
-    scale_x_discrete(position = "bottom") +
-  labs(x = NULL, y = NULL) +
-  coord_cartesian(clip = "off") +
-  scale_color_manual(values = method_colors, guide = "none") +
-  theme_bw() +
-  theme(axis.text.y = element_blank(),
-        text = element_text(size = 10),
-        panel.border = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank(), 
-        strip.background = element_rect(fill = NA), 
-        panel.spacing.y = unit(0.05, "lines"),
-        panel.spacing.x = unit(.1, "lines"))
-
-# plot_base_method_color_text
-
-plot_base_method_color_text_rot <-
-  ggplot(plot_dt, 
-         aes(x = Method, 
-             y = variable, 
-             color = Method)) +
-  geom_text(aes(label = value), 
-            size = 3, angle = 90) +
-    # scale_x_discrete(position = "bottom") +
-  labs(x = NULL, y = NULL) +
-  coord_cartesian(clip = "off") +
-  scale_color_manual(values = method_colors, guide = "none") +
-  theme_bw() +
-  theme(axis.text.x = element_blank(),
-        axis.text.y = element_text(angle = 90, hjust = .5),
-        text = element_text(size = 10),
-        panel.border = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank(), 
-        strip.background = element_rect(fill = NA), 
-        panel.spacing.y = unit(0.05, "lines"),
-        panel.spacing.x = unit(.1, "lines"))
-
-# plot_base_method_color_text_rot
-```
-
-```{r}
-method_labels_table <- 
-  dcast(plot_dt[, .(Method, variable, value)], 
-      Method ~ variable)[, .(Method, 
-                             MethodLabel = paste(`Base tool`, 
-                                                 Parameters, #Test, 
-                                                 sep = " "))]
-```
-
-# Base tiles
-
-```{r, fig.width=7, fig.height=4}
-library(ggthemes)
-plot_dt <- copy(method_types)
-
-plot_base_method_type_tiles <-
-  ggplot(plot_dt, 
-         aes(y = Method, 
-             x = "", fill = Type)) +
-  geom_tile(color = "white", width = 0.9, height = 0.9, 
-            size = .5) +
-  labs(x = NULL, y = NULL) +
-  scale_fill_manual(values = setNames(tableau_color_pal(palette = "Classic Purple-Gray 6")(2), #"Nuriel Stone"
-                                      c("Bulk RNA-seq", "Single cell / metagenome"))) +
-  guides(fill = guide_legend(title = "Method purpose", 
-                             title.position = "left", 
-                             title.hjust = .5)) +
-  theme_dendro() +
-  theme(legend.position = "bottom")
-
-# plot_base_method_type_tiles
+source("method_types_and_colors.R")
+plot_base_method_color_text_rot <- plot_base_method_color_text
+plot_base_method_color_text <- plot_base_method_color_text_v
+plot_base_method_type_tiles <- plot_base_method_type_tiles_v
 ```
 
 # Jaccard
@@ -226,12 +58,29 @@ Here, the Jaccard similarity is computed on the DECs called by each method at 5%
 Therefore, 
 
 ```{r}
-sumBench_perf_metrics_qs_files <- file.path("benchmark_results", 
-                                            c("DM1", "IPF", "MS", "IDC"), 
-                                            "sumBench_perf_metrics.qs")
+# sumBench_perf_metrics_qs_files <- file.path("benchmark_results", 
+#                                             c("DM1", "IPF", "MS", "IDC"), 
+#                                             "sumBench_perf_metrics.qs")
+# 
+# names(sumBench_perf_metrics_qs_files) <- sub("benchmark_results/", "",
+#                                              dirname(sumBench_perf_metrics_qs_files))
 
-names(sumBench_perf_metrics_qs_files) <- sub("benchmark_results/", "",
-                                             dirname(sumBench_perf_metrics_qs_files))
+# benchmark_results_dirs <- c("benchmark_results", "benchmark_results_2")
+benchmark_results_dirs <- c("benchmark_results")
+sumBench_perf_metrics_qs_files <- 
+  unlist(lapply(X = benchmark_results_dirs,
+                FUN = file.path, 
+                file.path(c("DM1", "IPF", "MS", "IDC"), 
+                          "sumBench_perf_metrics.qs")))
+names(sumBench_perf_metrics_qs_files) <- 
+  sub("benchmark_results", "",
+      dirname(sumBench_perf_metrics_qs_files))
+
+## check if some files are missing and fix the list
+exist_files <- sapply(sumBench_perf_metrics_qs_files, file.exists)
+warning("Missed files:\n", paste0(sumBench_perf_metrics_qs_files[!exist_files],
+                                  collapse = "\n"))
+sumBench_perf_metrics_qs_files <- sumBench_perf_metrics_qs_files[exist_files]
 
 ncpus <- BiocParallel::multicoreWorkers()
 bpparam <- BiocParallel::SerialParam()
@@ -260,6 +109,8 @@ adj_pval_deind_dt <-
 
 adj_pval_deind_dt[, c("SetSize", "MZP", "DsType", "DsId") := tstrsplit(Dataset, "_"), 
                   by = Dataset]
+
+adj_pval_deind_dt[, Source_ds := gsub("^[^/]*/", "", Source_ds), by = Source_ds]
 ```
 
 ```{r}
@@ -288,9 +139,9 @@ jaccard_dists <-
             as.data.table(as.matrix(dist(x = t(mt) <= .05, method = "binary")),
                           keep.rownames = "Method")
         }), 
-        idcol = "Dataset")
+        idcol = "Dataset", fill = T)
     }), 
-    idcol = "Source_ds")
+    idcol = "Source_ds", fill = T)
 
 ## compute dists for 10% FDR
 jaccard_dists_0.1 <- 
@@ -306,9 +157,9 @@ jaccard_dists_0.1 <-
             as.data.table(as.matrix(dist(x = t(mt) <= .1, method = "binary")),
                           keep.rownames = "Method")
         }), 
-        idcol = "Dataset")
+        idcol = "Dataset", fill = T)
     }), 
-    idcol = "Source_ds")
+    idcol = "Source_ds", fill = T)
 
 ## compute dists for 1% FDR
 jaccard_dists_0.01 <-
@@ -324,9 +175,9 @@ jaccard_dists_0.01 <-
             as.data.table(as.matrix(dist(x = t(mt) <= .01, method = "binary")),
                           keep.rownames = "Method")
         }),
-        idcol = "Dataset")
+        idcol = "Dataset", fill = T)
     }),
-    idcol = "Source_ds")
+    idcol = "Source_ds", fill = T)
 
 avg_jaccard_dists <-
     melt(jaccard_dists, 
@@ -363,7 +214,7 @@ avg_jaccard_dists_0.01 <-
 avg_jaccard_dists_l <- split(avg_jaccard_dists, by = c("Source_ds", "SetSize"), flatten = F, keep.by = F)
 
 method_names <- sort(unique(avg_jaccard_dists_l$DM1$N10$Method))
-method_colors <- setNames(hue_pal()(length(method_names)), method_names)
+# method_colors <- setNames(hue_pal()(length(method_names)), method_names)
 
 # x <- avg_jaccard_dists_l$DM1$N10
 # ggdendrogram(hclust(as.dist(data.frame(dcast(setSize, 
@@ -444,7 +295,7 @@ plots <-
                                       position = "right", 
                                       expand = c(0, 0)) +
                    scale_x_reverse(name = "Jaccard distance", expand = c(0, 0)) +
-                   coord_cartesian(ylim = c(.5, 38.5)) +
+                   coord_cartesian(ylim = c(.5, length(unique(label(ddata)$label))+.5)) +
                    theme_minimal() +
                    theme(axis.text.y = element_text(color = method_colors[label(ddata)$label]),
                          panel.grid.major.x = element_blank(),
@@ -466,23 +317,24 @@ plots <-
 #   theme(axis.text.x = element_text(angle = -35, hjust = .5, vjust = -1))
 
 
-wrap_plots(wrap_plots(plots$N03$plot + 
-             theme(axis.text.y = element_blank(),
-                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
-           plot_base_method_color_text + 
-             scale_y_discrete(limits = label(plots$N03$ddata)$label) &
-             ggtitle("N03"), 
-           nrow = 1, widths = c(.6, 1)), 
+wrap_plots(
+  wrap_plots(plots$N03$plot + 
+               theme(axis.text.y = element_blank(),
+                     axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+             plot_base_method_color_text + 
+               scale_y_discrete(limits = label(plots$N03$ddata)$label) &
+               ggtitle("N03"), 
+             nrow = 1, widths = c(.6, 1)), 
   wrap_plots(plots$N05$plot + 
                theme(axis.text.y = element_blank(),
-                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+                     axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
              plot_base_method_color_text + 
                scale_y_discrete(limits = label(plots$N05$ddata)$label) &
                ggtitle("N05"), 
              nrow = 1, widths = c(.6, 1)),
   wrap_plots(plots$N10$plot + 
                theme(axis.text.y = element_blank(),
-                   axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
+                     axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)), 
              plot_base_method_color_text + 
                scale_y_discrete(limits = label(plots$N10$ddata)$label) &
                ggtitle("N10"), 
@@ -768,7 +620,7 @@ n10fdr10_plot <-
                        position = "right", 
                        expand = c(0, 0)) +
     scale_x_reverse(name = "Jaccard distance", expand = c(0, 0)) +
-    coord_cartesian(ylim = c(.5, 38.5)) +
+    coord_cartesian(ylim = c(.5, length(unique(label(n10fdr10_ddata)$label))+.5)) +
     theme_minimal() +
     theme(axis.text.y = element_text(color = method_colors[label(n10fdr10_ddata)$label]),
           panel.grid.major.x = element_blank(),
