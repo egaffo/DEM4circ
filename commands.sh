@@ -35,7 +35,7 @@ Rscript -e "rmarkdown::render(input = 'R/simulations/semiparametric/datasets_sim
 params = list(n_sims = 30, max_circrrnas = 10000, dec_fraction = 0.1), \
 output_dir = 'R/simulations/semiparametric')"
 
----- assess the quality of the simulated data sets ----#
+#---- assess the quality of the simulated data sets ----#
 Rscript -e "rmarkdown::render(input = 'R/simulations/simdata_qual/assess_simdata_qual.Rmd', \
 params = list(simulated_datasets_qs = '../semiparametric/simdata/DM1_trimmed_simulated_datasets.qs', \
 trimmed_source_dataset.qs = '../semiparametric/simdata/DM1_trimmed_source_dataset.qs', \
@@ -106,13 +106,34 @@ params = list(outdir = 'benchmark_results/MS', \
 inputData = 'filtered_simdata/MS/datasetList.qs'), \
 output_file = 'R/benchmark/benchmark_MS.html',  output_dir = 'R/benchmark')"
 
+# ---- update with additional methods and compute performance metrics ----#
+# Rscript -e "rmarkdown::render(input = 'R/benchmark/benchmark_2.Rmd', \
+# params = list(outdir = 'benchmark_results_2/DM1', \
+# inputData = 'filtered_simdata/DM1/datasetList.qs'), \
+# output_file = 'R/benchmark_2/benchmark_2_DM1.html',  output_dir = 'R/benchmark')"
+#
+# Rscript -e "rmarkdown::render(input = 'R/benchmark/benchmark_2.Rmd', \
+# params = list(outdir = 'benchmark_results_2/IDC', \
+# inputData = 'filtered_simdata/IDC/datasetList.qs'), \
+# output_file = 'R/benchmark_2/benchmark_2_IDC.html',  output_dir = 'R/benchmark')"
+#
+# Rscript -e "rmarkdown::render(input = 'R/benchmark/benchmark_2.Rmd', \
+# params = list(outdir = 'benchmark_results_2/IPF', \
+# inputData = 'filtered_simdata/IPF/datasetList.qs'), \
+# output_file = 'R/benchmark_2/benchmark_2_IPF.html',  output_dir = 'R/benchmark')"
+#
+# Rscript -e "rmarkdown::render(input = 'R/benchmark/benchmark_2.Rmd', \
+# params = list(outdir = 'benchmark_results_2/MS', \
+# inputData = 'filtered_simdata/MS/datasetList.qs'), \
+# output_file = 'R/benchmark_2/benchmark_2_MS.html',  output_dir = 'R/benchmark')"
+
 #---- evaluate performance metrics ----#
 rm -r R/benchmark/overall_evaluations
 Rscript -e "rmarkdown::render(input = 'R/benchmark/overall_evaluations.Rmd', output_dir = 'R/benchmark')"
 Rscript -e "rmarkdown::render(input = 'R/benchmark/CAT.Rmd', output_dir = 'R/benchmark')"
 Rscript -e "rmarkdown::render(input = 'R/benchmark/jaccard.Rmd', output_dir = 'R/benchmark')"
 
----- simulate the data sets with nonparametric approach ----#
+#---- simulate the data sets with nonparametric approach ----#
 Rscript R/simulations/nonparametric/simSeq_PMID35078526.R "data/PMID35078526_rawCIRI2output.tsv" "R/simulations/nonparametric"
 
 #---- assess the quality of the simulated data sets ----#
