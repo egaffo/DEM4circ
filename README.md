@@ -4,9 +4,11 @@
 
 CircRNA expression data from RNA-seq have particular characteristics, such as a high proportion of small and zero counts, which might hamper commonly used differential expression methods.
 
-This repository contains the code used to benchmark 38 differential expression pipelines on circRNA expression RNA-seq data. 
+This repository contains the code used to benchmark 38 differential expression pipelines on circRNA expression RNA-seq data.
+
 The theoretical considerations supporting the software are described in:
-"Buratin A, Bortoluzzi S, Gaffo E. Systematic benchmarking of statistical methods to assess differential expression of circular RNAs. Brief Bioinform. 2023"
+
+Buratin A, Bortoluzzi S, Gaffo E. *Systematic benchmarking of statistical methods to assess differential expression of circular RNAs*. Brief Bioinform. 2023 Jan 19;24(1):bbac612. [doi: 10.1093/bib/bbac612](https://doi.org/10.1093/bib/bbac612). PMID: 36592056; PMCID: PMC9851295.
 
 ##### Copyright
 
